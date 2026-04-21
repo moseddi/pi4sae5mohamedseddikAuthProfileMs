@@ -12,7 +12,6 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
-import tn.esprit.authservice.client.UserServiceClient;
 import tn.esprit.authservice.dto.AuthResponse;
 import tn.esprit.authservice.dto.ForgotPasswordRequest;
 import tn.esprit.authservice.dto.LoginRequest;
@@ -20,28 +19,25 @@ import tn.esprit.authservice.dto.RegisterRequest;
 import tn.esprit.authservice.entity.User;
 import tn.esprit.authservice.repository.UserRepository;
 import tn.esprit.authservice.service.AuthService;
+import tn.esprit.authservice.client.UserServiceClient;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-
 @Slf4j
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
 public class AuthController {
-
     private final UserRepository userRepository;
     private final AuthService authService;
     private final UserServiceClient userServiceClient;
-    private final Keycloak keycloakAdmin;
     private final JavaMailSender mailSender;
+    private final Keycloak keycloakAdmin;
 
     @Value("${keycloak.realm}")
     private String realm;
-
-    // ★★★ SOLUTION: rendre cette Map STATIC pour qu'elle soit partagée entre toutes les requêtes ★★★
     private static Map<String, String> resetTokens = new HashMap<>();
 
     @PostMapping("/register")
@@ -51,15 +47,19 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
+        // Do login first and store the response
         AuthResponse response = authService.login(request);
 
+        // Record login activity in User Service
         try {
             userServiceClient.recordUserLogin(request.getEmail());
-            log.info("✅ Login recorded for: {}", request.getEmail());
+            System.out.println("✅ Login recorded for: " + request.getEmail());
         } catch (Exception e) {
-            log.error("⚠️ Failed to record login activity: {}", e.getMessage());
+            // Log error but don't fail the login
+            System.err.println("⚠️ Failed to record login activity: " + e.getMessage());
         }
 
+        // Return the response
         return ResponseEntity.ok(response);
     }
 
@@ -81,7 +81,6 @@ public class AuthController {
                 "\nEmail verified: " + user.isEmailVerified() +
                 "\nHash: " + user.getPassword();
     }
-
     @PostMapping("/forgot-password")
     public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
         log.info("========== FORGOT PASSWORD REQUEST ==========");
@@ -260,4 +259,21 @@ public class AuthController {
             return "❌ Erreur: " + e.getMessage();
         }
     }
+
+    //    @PostMapping("/logout")
+//    public ResponseEntity<AuthResponse> logout(
+//            @RequestParam String email,
+//            @RequestParam(defaultValue = "VOLUNTARY") String logoutType) {
+//        log.info("Logout request for: {} with type: {}", email, logoutType);
+//        return ResponseEntity.ok(authService.logout(email, logoutType));
+//    }
+    @PostMapping("/logout")
+    public ResponseEntity<AuthResponse> logout(
+            @RequestParam String email,
+            @RequestParam(defaultValue = "VOLUNTARY") String logoutType) {
+        log.info("📡 Logout endpoint called: {} ({})", email, logoutType);
+        return ResponseEntity.ok(authService.logout(email, logoutType));
+    }
+
+
 }

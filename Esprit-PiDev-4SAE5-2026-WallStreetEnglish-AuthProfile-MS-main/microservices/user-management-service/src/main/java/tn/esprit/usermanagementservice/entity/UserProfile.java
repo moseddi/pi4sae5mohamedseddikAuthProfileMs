@@ -41,7 +41,15 @@ public class UserProfile {
 
     private String country;
 
-    // Tracking comme vous vouliez
+    // ✅ ADD THESE 3 FIELDS
+    private boolean blocked = false;
+    private LocalDateTime blockedAt;
+    private String blockedReason;
+
+    private String reactivationToken;
+    private LocalDateTime reactivationTokenExpiry;
+
+    // Tracking
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

@@ -33,6 +33,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/validate-reset-token").permitAll()
                         .requestMatchers("/api/auth/test-email").permitAll()
                         .requestMatchers("/api/auth/admin/**").authenticated()
+                        .requestMatchers("/api/auth/logout").permitAll()  // Add this line
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2

@@ -2,7 +2,6 @@ package tn.esprit.usermanagementservice.dto;
 
 import lombok.Data;
 import tn.esprit.usermanagementservice.entity.Role;
-
 import java.time.LocalDateTime;
 
 @Data
@@ -25,4 +24,8 @@ public class UserProfileDTO {
     private boolean active;
     private Integer loginCount;
     private String createdBy;
+
+    // ✅ ADD THESE 2 FIELDS
+    private boolean blocked;
+    private String blockedReason;
 }

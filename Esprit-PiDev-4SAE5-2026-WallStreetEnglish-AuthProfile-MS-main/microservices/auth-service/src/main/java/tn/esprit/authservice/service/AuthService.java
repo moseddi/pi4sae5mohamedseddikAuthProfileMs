@@ -1,6 +1,5 @@
 package tn.esprit.authservice.service;
 
-import jakarta.ws.rs.core.Response;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.keycloak.admin.client.Keycloak;
@@ -13,17 +12,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
-import tn.esprit.authservice.client.UserServiceClient;
+import tn.esprit.authservice.config.RabbitMQConfig;
 import tn.esprit.authservice.dto.AuthResponse;
+import tn.esprit.authservice.dto.LoginEventMessage;
 import tn.esprit.authservice.dto.LoginRequest;
 import tn.esprit.authservice.dto.RegisterRequest;
+import tn.esprit.authservice.entity.LogoutType;
 import tn.esprit.authservice.entity.Role;
 import tn.esprit.authservice.entity.User;
 import tn.esprit.authservice.repository.UserRepository;
+import tn.esprit.authservice.client.UserServiceClient;
 
+import jakarta.ws.rs.core.Response;
+import jakarta.servlet.http.HttpServletRequest;
+
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -34,6 +41,8 @@ public class AuthService {
     private final UserServiceClient userServiceClient;
     private final Keycloak keycloakAdmin;
     private final WebClient webClient;
+    private final org.springframework.amqp.rabbit.core.RabbitTemplate rabbitTemplate;
+    private final HttpServletRequest httpServletRequest;
 
     @Value("${keycloak.realm}")
     private String realm;
@@ -51,7 +60,6 @@ public class AuthService {
         log.info("First Name: {}", request.getFirstName());
         log.info("Last Name: {}", request.getLastName());
 
-        // Check if user already exists
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
             log.error("❌ Email already exists in database: {}", request.getEmail());
             throw new RuntimeException("Email already exists");
@@ -60,7 +68,6 @@ public class AuthService {
         try {
             log.info("Step 1: Creating user in Keycloak: {}", request.getEmail());
 
-            // ===== 1. Create user in Keycloak =====
             UserRepresentation keycloakUser = new UserRepresentation();
             keycloakUser.setUsername(request.getEmail());
             keycloakUser.setEmail(request.getEmail());
@@ -93,11 +100,9 @@ public class AuthService {
             String keycloakId = response.getLocation().getPath().replaceAll(".*/([^/]+)$", "$1");
             log.info("✅ User created in Keycloak with ID: {}", keycloakId);
 
-            // ===== 2. Determine role =====
             Role userRole = request.getRole() != null ? request.getRole() : Role.STUDENT;
             log.info("Step 2: Role determined: {}", userRole);
 
-            // ===== 3. Assign REALM role in Keycloak =====
             log.info("Step 3: Attempting to assign role '{}' in Keycloak", userRole);
             try {
                 log.info("Fetching role '{}' from Keycloak realm '{}'", userRole.name(), realm);
@@ -113,29 +118,13 @@ public class AuthService {
                 log.info("✅ Successfully assigned realm role {} to user", userRole);
             } catch (Exception e) {
                 log.error("❌ FAILED TO ASSIGN ROLE: {}", e.getMessage());
-                log.error("Exception type: {}", e.getClass().getName());
-                log.error("Stack trace:", e);
-
-                // Try to list available roles to see what exists
-                try {
-                    log.info("Listing all available roles in realm '{}':", realm);
-                    List<RoleRepresentation> allRoles = keycloakAdmin.realm(realm).roles().list();
-                    for (RoleRepresentation r : allRoles) {
-                        log.info("Available role: {} (ID: {})", r.getName(), r.getId());
-                    }
-                } catch (Exception listError) {
-                    log.error("Could not list roles: {}", listError.getMessage());
-                }
-
-                log.error("Make sure role '{}' exists in Keycloak realm '{}'", userRole.name(), realm);
                 throw new RuntimeException("Failed to assign role in Keycloak: " + e.getMessage());
             }
 
-            // ===== 4. Save in local database =====
             log.info("Step 4: Saving user in local database");
             User localUser = User.builder()
                     .email(request.getEmail())
-                    .password("")  // Password not stored locally
+                    .password("")
                     .role(userRole)
                     .keycloakId(keycloakId)
                     .active(true)
@@ -145,7 +134,6 @@ public class AuthService {
             User savedUser = userRepository.save(localUser);
             log.info("✅ User saved in local DB with ID: {}", savedUser.getId());
 
-            // ===== 5. Get token from Keycloak =====
             log.info("Step 5: Getting token from Keycloak for user: {}", request.getEmail());
             Map<String, Object> tokenResponse = getTokenFromKeycloak(
                     request.getEmail(),
@@ -163,7 +151,6 @@ public class AuthService {
                 log.warn("⚠️ Could not obtain token, but user was created");
             }
 
-            // ===== 6. Create profile in User Service =====
             log.info("Step 6: Creating profile in User Service");
             try {
                 userServiceClient.createProfile(
@@ -175,7 +162,6 @@ public class AuthService {
                 log.info("✅ Profile created in User Service");
             } catch (Exception e) {
                 log.warn("⚠️ Profile creation failed: {}", e.getMessage());
-                log.warn("This is not critical - profile can be created later");
             }
 
             log.info("========== REGISTRATION COMPLETED SUCCESSFULLY ==========");
@@ -192,8 +178,23 @@ public class AuthService {
         } catch (Exception e) {
             log.error("========== REGISTRATION FAILED ==========");
             log.error("Error: {}", e.getMessage());
-            log.error("Stack trace:", e);
             throw new RuntimeException("Registration failed: " + e.getMessage());
+        }
+    }
+
+    // ✅ ADD THIS METHOD
+    private boolean isUserBlocked(String email) {
+        try {
+            String url = "http://localhost:8082/api/users/check-blocked/" + email;
+            Map<String, Object> response = webClient.get()
+                    .uri(url)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
+            return (Boolean) response.get("blocked");
+        } catch (Exception e) {
+            log.error("Failed to check if user is blocked: {}", e.getMessage());
+            return false;
         }
     }
 
@@ -213,13 +214,26 @@ public class AuthService {
             User user = userRepository.findByEmail(request.getEmail())
                     .orElseThrow(() -> new RuntimeException("User not found in database"));
 
+            // ✅ CHECK IF USER IS BLOCKED
+            if (isUserBlocked(request.getEmail())) {
+                throw new RuntimeException("Your account is blocked. Please check your email for reactivation instructions.");
+            }
+
             log.info("User found in database with role: {}", user.getRole());
 
             try {
                 userServiceClient.recordUserLogin(request.getEmail());
                 log.info("Login recorded for: {}", request.getEmail());
             } catch (Exception e) {
-                log.error("Failed to record login: {}", e.getMessage());
+                log.error("Failed to record login in User Service: {}", e.getMessage());
+            }
+
+            try {
+                LoginEventMessage event = buildLoginEventMessage(user);
+                rabbitTemplate.convertAndSend(RabbitMQConfig.LOGIN_QUEUE, event);
+                log.info("✅ Sent LoginEventMessage to RabbitMQ: {} for {}", event.getType(), event.getEmail());
+            } catch (Exception e) {
+                log.error("❌ RabbitMQ error: {}", e.getMessage());
             }
 
             return AuthResponse.builder()
@@ -234,6 +248,35 @@ public class AuthService {
         } catch (Exception e) {
             log.error("Login failed: {}", e.getMessage());
             throw new RuntimeException("Invalid credentials");
+        }
+    }
+
+    public AuthResponse logout(String email, String logoutType) {
+        try {
+            log.info("Logging out user: {}", email);
+
+            User user = userRepository.findByEmail(email)
+                    .orElseThrow(() -> new RuntimeException("User not found in database"));
+
+            LogoutType type = logoutType != null ? LogoutType.valueOf(logoutType) : LogoutType.VOLUNTARY;
+
+            try {
+                LoginEventMessage event = buildLogoutEventMessage(user, type);
+                rabbitTemplate.convertAndSend(RabbitMQConfig.LOGIN_QUEUE, event);
+                log.info("✅ Sent LogoutEventMessage to RabbitMQ: {} for {}", event.getType(), event.getEmail());
+            } catch (Exception e) {
+                log.error("❌ RabbitMQ error during logout: {}", e.getMessage());
+            }
+
+            return AuthResponse.builder()
+                    .email(user.getEmail())
+                    .role(user.getRole())
+                    .message("Logout successful")
+                    .build();
+
+        } catch (Exception e) {
+            log.error("Logout failed: {}", e.getMessage());
+            throw new RuntimeException("Logout failed: " + e.getMessage());
         }
     }
 
@@ -261,6 +304,118 @@ public class AuthService {
         } catch (Exception e) {
             log.error("Error getting token from Keycloak: {}", e.getMessage());
             return null;
+        }
+    }
+
+    private LoginEventMessage buildLoginEventMessage(User user) {
+        LoginEventMessage event = new LoginEventMessage();
+        event.setEmail(user.getEmail());
+        event.setRole(user.getRole().name());
+        event.setType(LoginEventMessage.EventType.LOGIN);
+        event.setTimestamp(LocalDateTime.now());
+        event.setSessionId(UUID.randomUUID().toString());
+
+        String userAgent = httpServletRequest.getHeader("User-Agent");
+        String ipAddress = getClientIpAddress();
+
+        event.setIpAddress(ipAddress);
+
+        if (userAgent != null) {
+            event.setBrowser(parseBrowser(userAgent));
+            event.setOs(parseOperatingSystem(userAgent));
+            event.setDeviceType(parseDeviceType(userAgent));
+        } else {
+            event.setBrowser("Unknown");
+            event.setOs("Unknown");
+            event.setDeviceType("Desktop");
+        }
+
+        return event;
+    }
+
+    private LoginEventMessage buildLogoutEventMessage(User user, LogoutType logoutType) {
+        LoginEventMessage event = new LoginEventMessage();
+        event.setEmail(user.getEmail());
+        event.setRole(user.getRole().name());
+        event.setType(LoginEventMessage.EventType.LOGOUT);
+        event.setLogoutType(convertLogoutType(logoutType));
+        event.setTimestamp(LocalDateTime.now());
+
+        String userAgent = httpServletRequest.getHeader("User-Agent");
+        String ipAddress = getClientIpAddress();
+
+        event.setIpAddress(ipAddress);
+
+        if (userAgent != null) {
+            event.setBrowser(parseBrowser(userAgent));
+            event.setOs(parseOperatingSystem(userAgent));
+            event.setDeviceType(parseDeviceType(userAgent));
+        } else {
+            event.setBrowser("Unknown");
+            event.setOs("Unknown");
+            event.setDeviceType("Desktop");
+        }
+
+        return event;
+    }
+
+    private String getClientIpAddress() {
+        String xForwardedFor = httpServletRequest.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
+            String ip = xForwardedFor.split(",")[0].trim();
+            if ("0:0:0:0:0:0:0:1".equals(ip) || "0:0:0:0:0:0:0:1%0".equals(ip)) {
+                return "127.0.0.1";
+            }
+            return ip;
+        }
+
+        String xRealIp = httpServletRequest.getHeader("X-Real-IP");
+        if (xRealIp != null && !xRealIp.isEmpty()) {
+            return xRealIp;
+        }
+
+        String remoteAddr = httpServletRequest.getRemoteAddr();
+        if ("0:0:0:0:0:0:0:1".equals(remoteAddr) || "0:0:0:0:0:0:0:1%0".equals(remoteAddr)) {
+            return "127.0.0.1";
+        }
+        return remoteAddr;
+    }
+
+    private String parseBrowser(String userAgent) {
+        if (userAgent.contains("Chrome")) return "Chrome";
+        if (userAgent.contains("Firefox")) return "Firefox";
+        if (userAgent.contains("Safari") && !userAgent.contains("Chrome")) return "Safari";
+        if (userAgent.contains("Edge")) return "Edge";
+        if (userAgent.contains("Opera") || userAgent.contains("OPR")) return "Opera";
+        if (userAgent.contains("MSIE") || userAgent.contains("Trident")) return "Internet Explorer";
+        return "Unknown";
+    }
+
+    private String parseOperatingSystem(String userAgent) {
+        if (userAgent.contains("Windows")) return "Windows";
+        if (userAgent.contains("Mac")) return "MacOS";
+        if (userAgent.contains("Linux")) return "Linux";
+        if (userAgent.contains("Android")) return "Android";
+        if (userAgent.contains("iOS") || userAgent.contains("iPhone") || userAgent.contains("iPad")) return "iOS";
+        return "Unknown";
+    }
+
+    private String parseDeviceType(String userAgent) {
+        if (userAgent.contains("Mobile") || userAgent.contains("Android") && !userAgent.contains("Tablet")) {
+            return "Mobile";
+        }
+        if (userAgent.contains("Tablet") || userAgent.contains("iPad")) {
+            return "Tablet";
+        }
+        return "Desktop";
+    }
+
+    private LoginEventMessage.LogoutType convertLogoutType(LogoutType logoutType) {
+        switch (logoutType) {
+            case VOLUNTARY: return LoginEventMessage.LogoutType.VOLUNTARY;
+            case TIMEOUT: return LoginEventMessage.LogoutType.TIMEOUT;
+            case FORCED: return LoginEventMessage.LogoutType.FORCED;
+            default: return LoginEventMessage.LogoutType.VOLUNTARY;
         }
     }
 }

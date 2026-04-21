@@ -19,23 +19,47 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.disable())
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints - no token needed
+                        // Public endpoints
                         .requestMatchers("/api/users/from-auth").permitAll()
                         .requestMatchers("/api/users/record-login").permitAll()
+                        .requestMatchers("/api/users/record-logout").permitAll()
                         .requestMatchers("/api/users/sync-from-auth").permitAll()
                         .requestMatchers("/api/users/test").permitAll()
-                        .requestMatchers("/api/users/stats/**").permitAll()  // ← AJOUTE CETTE LIGNE
+                        .requestMatchers("/api/users/stats/**").permitAll()
+                        .requestMatchers("/api/users/recent-logins").permitAll()
+                        .requestMatchers("/api/users/recent-logins-formatted").permitAll()
+                        .requestMatchers("/api/users/logins/today").permitAll()
+                        .requestMatchers("/api/users/sessions/active-count").permitAll()
+                        .requestMatchers("/api/users/logins/suspicious-count").permitAll()
+                        .requestMatchers("/api/users/active-sessions").permitAll()
+                        .requestMatchers("/api/users/statistics").permitAll()
 
-                        // Protected endpoints - need valid Keycloak token
+                        // ✅ REACTIVATION & UNBLOCK ENDPOINTS (Public)
+                        .requestMatchers("/api/users/reactivate/**").permitAll()
+                        .requestMatchers("/api/users/reactivate-request").permitAll()
+                        .requestMatchers("/api/users/check-blocked/**").permitAll()
+                        .requestMatchers("/api/users/unblock/**").permitAll()
+
+                        // WebSocket endpoints
+                        .requestMatchers("/ws/**").permitAll()
+                        .requestMatchers("/ws/info").permitAll()
+                        .requestMatchers("/topic/**").permitAll()
+                        .requestMatchers("/app/**").permitAll()
+
+                        // Protected endpoints (admin only)
                         .requestMatchers("/api/users/email/**").authenticated()
                         .requestMatchers("/api/users/profile/**").authenticated()
                         .requestMatchers("/api/users/force-logout/**").authenticated()
                         .requestMatchers("/api/users/{id}").authenticated()
                         .requestMatchers("/api/users").authenticated()
+                        .requestMatchers("/api/users/block/**").authenticated()
+                        .requestMatchers("/api/users/send-reactivation-email/**").authenticated()
                         .anyRequest().authenticated()
                 )
-                .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .sessionManagement(sess -> sess
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(withDefaults()));
 
         return http.build();
@@ -43,6 +67,10 @@ public class SecurityConfig {
 
     @Bean
     public JwtDecoder jwtDecoder() {
-        return NimbusJwtDecoder.withJwkSetUri("http://localhost:6083/realms/myapp2/protocol/openid-connect/certs").build();
+        return NimbusJwtDecoder
+                .withJwkSetUri(
+                        "http://localhost:6083/realms/myapp2/protocol/openid-connect/certs"
+                )
+                .build();
     }
 }

@@ -17,4 +17,6 @@ public interface UserServiceClient {
 
     @PostMapping("/api/users/record-login")
     void recordUserLogin(@RequestParam("email") String email);
+    @PostMapping("/api/users/record-logout")
+    void recordUserLogout(@RequestParam String email, @RequestParam String logoutType);
 }
