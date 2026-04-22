@@ -43,7 +43,7 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('SonarQube') {
+                withSonarQubeEnv('sq1') {
                     dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
                         sh 'mvn sonar:sonar -Dsonar.projectKey=auth-service -Dsonar.projectName="Auth Service" -Dsonar.login=${SONAR_TOKEN}'
                     }
