@@ -16,14 +16,16 @@ pipeline {
 
         stage('Install Parent POM') {
             steps {
-                sh 'mvn clean install -N'
+                dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main') {
+                    sh 'mvn clean install -N'
+                }
                 echo "✅ Parent POM installé"
             }
         }
 
         stage('Tests - Auth Service') {
             steps {
-                dir('microservices/auth-service') {
+                dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
                     sh 'mvn clean test'
                 }
                 echo "✅ Tests Auth Service passés"
@@ -32,7 +34,7 @@ pipeline {
 
         stage('Tests - User Service') {
             steps {
-                dir('microservices/user-management-service') {
+                dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service') {
                     sh 'mvn clean test'
                 }
                 echo "✅ Tests User Service passés"
@@ -42,10 +44,10 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('SonarQube') {
-                    dir('microservices/auth-service') {
+                    dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
                         sh 'mvn sonar:sonar -Dsonar.projectKey=auth-service -Dsonar.projectName="Auth Service" -Dsonar.login=${SONAR_TOKEN}'
                     }
-                    dir('microservices/user-management-service') {
+                    dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service') {
                         sh 'mvn sonar:sonar -Dsonar.projectKey=user-service -Dsonar.projectName="User Management Service" -Dsonar.login=${SONAR_TOKEN}'
                     }
                 }
