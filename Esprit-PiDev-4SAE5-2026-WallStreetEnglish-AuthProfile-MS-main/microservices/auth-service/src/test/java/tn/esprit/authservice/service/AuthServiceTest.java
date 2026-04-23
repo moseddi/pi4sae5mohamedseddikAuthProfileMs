@@ -1,6 +1,5 @@
 package tn.esprit.authservice.service;
 
-import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -17,11 +16,11 @@ import tn.esprit.authservice.entity.Role;
 import tn.esprit.authservice.entity.User;
 import tn.esprit.authservice.repository.UserRepository;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
