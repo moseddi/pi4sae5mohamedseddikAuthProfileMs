@@ -1,6 +1,5 @@
 package tn.esprit.authservice.service;
 
-import io.jsonwebtoken.ExpiredJwtException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -24,15 +23,15 @@ class JwtServiceExtendedTest {
     @InjectMocks
     private JwtService jwtService;
 
-    private static final String SECRET =
-            "404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970";
+    private final String secretKey = "404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970";
+    private final long expiration = 86400000L;
 
     private UserDetails userDetails;
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(jwtService, "secretKey", SECRET);
-        ReflectionTestUtils.setField(jwtService, "jwtExpiration", 86400000L);
+        ReflectionTestUtils.setField(jwtService, "secretKey", secretKey);
+        ReflectionTestUtils.setField(jwtService, "jwtExpiration", expiration);
 
         userDetails = User.builder()
                 .username("user@test.com")
@@ -42,53 +41,88 @@ class JwtServiceExtendedTest {
     }
 
     @Nested
-    @DisplayName("Token generation")
-    class GenerationTests {
+    @DisplayName("generateToken - variants")
+    class GenerateTokenVariants {
 
         @Test
-        @DisplayName("Generated token has three parts separated by dots")
-        void generateToken_HasThreeParts() {
+        @DisplayName("No extra claims - token is non-null and non-empty")
+        void generateToken_NoExtraClaims_ReturnsToken() {
             String token = jwtService.generateToken(userDetails);
-            assertEquals(3, token.split("\\.").length);
+            assertNotNull(token);
+            assertFalse(token.isBlank());
         }
 
         @Test
-        @DisplayName("Two calls with same user produce different tokens (timestamp differs)")
-        void generateToken_TwoCalls_ProduceDifferentTokens() throws InterruptedException {
+        @DisplayName("With role claim - extractRole returns correct value")
+        void generateToken_WithRoleClaim_ExtractsRole() {
+            Map<String, Object> claims = new HashMap<>();
+            claims.put("role", "TUTOR");
+            String token = jwtService.generateToken(claims, userDetails);
+            assertEquals("TUTOR", jwtService.extractRole(token));
+        }
+
+        @Test
+        @DisplayName("With userId claim - extractUserId returns correct value")
+        void generateToken_WithUserIdClaim_ExtractsUserId() {
+            Map<String, Object> claims = new HashMap<>();
+            claims.put("userId", 42L);
+            String token = jwtService.generateToken(claims, userDetails);
+            assertEquals(42L, jwtService.extractUserId(token));
+        }
+
+        @Test
+        @DisplayName("With multiple extra claims - all extracted correctly")
+        void generateToken_WithMultipleClaims_AllExtracted() {
+            Map<String, Object> claims = new HashMap<>();
+            claims.put("role", "ADMIN");
+            claims.put("userId", 99L);
+            String token = jwtService.generateToken(claims, userDetails);
+            assertEquals("ADMIN", jwtService.extractRole(token));
+            assertEquals(99L, jwtService.extractUserId(token));
+        }
+
+        @Test
+        @DisplayName("Empty claims map - token still valid")
+        void generateToken_EmptyClaimsMap_TokenIsValid() {
+            String token = jwtService.generateToken(new HashMap<>(), userDetails);
+            assertTrue(jwtService.isTokenValid(token, userDetails));
+        }
+
+        @Test
+        @DisplayName("Two tokens for same user are both valid")
+        void generateToken_CalledTwice_BothValid() {
             String t1 = jwtService.generateToken(userDetails);
-            Thread.sleep(10);
             String t2 = jwtService.generateToken(userDetails);
-            // Both valid but issued at different times
-            assertEquals("user@test.com", jwtService.extractUsername(t1));
-            assertEquals("user@test.com", jwtService.extractUsername(t2));
-        }
-
-        @Test
-        @DisplayName("Token with no extra claims has null role and userId")
-        void generateToken_NoExtraClaims_NullRoleAndUserId() {
-            String token = jwtService.generateToken(userDetails);
-            assertNull(jwtService.extractRole(token));
-            assertNull(jwtService.extractUserId(token));
+            assertTrue(jwtService.isTokenValid(t1, userDetails));
+            assertTrue(jwtService.isTokenValid(t2, userDetails));
         }
     }
 
     @Nested
-    @DisplayName("Token validation")
-    class ValidationTests {
+    @DisplayName("extractUsername")
+    class ExtractUsernameTests {
 
         @Test
-        @DisplayName("Expired token should throw exception during validation")
-        void isTokenValid_ExpiredToken_ThrowsExpiredJwtException() {
-            ReflectionTestUtils.setField(jwtService, "jwtExpiration", -1000L);
-            String expiredToken = jwtService.generateToken(userDetails);
-            ReflectionTestUtils.setField(jwtService, "jwtExpiration", 86400000L);
+        @DisplayName("Returns correct username from token")
+        void extractUsername_ReturnsCorrectEmail() {
+            String token = jwtService.generateToken(userDetails);
+            assertEquals("user@test.com", jwtService.extractUsername(token));
+        }
+    }
 
-            assertThrows(ExpiredJwtException.class, () ->
-                    jwtService.isTokenValid(expiredToken, userDetails));
+    @Nested
+    @DisplayName("isTokenValid")
+    class IsTokenValidTests {
+
+        @Test
+        @DisplayName("Valid token for correct user returns true")
+        void isTokenValid_CorrectUser_ReturnsTrue() {
+            String token = jwtService.generateToken(userDetails);
+            assertTrue(jwtService.isTokenValid(token, userDetails));
         }
 
         @Test
-        @DisplayName("Token is invalid for user with different username")
+        @DisplayName("Valid token for wrong user returns false")
         void isTokenValid_WrongUser_ReturnsFalse() {
             String token = jwtService.generateToken(userDetails);
             UserDetails other = User.builder()
@@ -98,48 +132,48 @@ class JwtServiceExtendedTest {
                     .build();
             assertFalse(jwtService.isTokenValid(token, other));
         }
+
+        @Test
+        @DisplayName("Expired token throws ExpiredJwtException")
+        void isTokenValid_ExpiredToken_ThrowsExpiredJwtException() {
+            // Set expiration to 1ms so token expires almost immediately
+            ReflectionTestUtils.setField(jwtService, "jwtExpiration", 1L);
+            String token = jwtService.generateToken(userDetails);
+
+            // Wait long enough for the token to expire
+            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+
+            // JwtService does not swallow ExpiredJwtException — it propagates.
+            // assertThrows is the correct and honest test here.
+            assertThrows(io.jsonwebtoken.ExpiredJwtException.class,
+                    () -> jwtService.isTokenValid(token, userDetails));
+
+            // Restore normal expiration for subsequent tests
+            ReflectionTestUtils.setField(jwtService, "jwtExpiration", expiration);
+        }
     }
 
     @Nested
-    @DisplayName("Claim extraction")
-    class ClaimExtractionTests {
+    @DisplayName("extractRole - edge cases")
+    class ExtractRoleTests {
 
         @Test
-        @DisplayName("Should extract correct email from token subject")
-        void extractUsername_ReturnsEmail() {
+        @DisplayName("No role claim returns null")
+        void extractRole_NoRoleClaim_ReturnsNull() {
             String token = jwtService.generateToken(userDetails);
-            assertEquals("user@test.com", jwtService.extractUsername(token));
+            assertNull(jwtService.extractRole(token));
         }
+    }
+
+    @Nested
+    @DisplayName("extractUserId - edge cases")
+    class ExtractUserIdTests {
 
         @Test
-        @DisplayName("Should extract role from extra claims")
-        void extractRole_ReturnsRole() {
-            Map<String, Object> claims = new HashMap<>();
-            claims.put("role", "TUTOR");
-            String token = jwtService.generateToken(claims, userDetails);
-            assertEquals("TUTOR", jwtService.extractRole(token));
-        }
-
-        @Test
-        @DisplayName("Should extract userId as Long from extra claims")
-        void extractUserId_ReturnsLong() {
-            Map<String, Object> claims = new HashMap<>();
-            claims.put("userId", 42L);
-            String token = jwtService.generateToken(claims, userDetails);
-            assertEquals(42L, jwtService.extractUserId(token));
-        }
-
-        @Test
-        @DisplayName("Should extract all claims for a rich token")
-        void generateToken_AllExtraClaims_AllExtractable() {
-            Map<String, Object> claims = new HashMap<>();
-            claims.put("role", "ADMIN");
-            claims.put("userId", 99L);
-            String token = jwtService.generateToken(claims, userDetails);
-
-            assertEquals("user@test.com", jwtService.extractUsername(token));
-            assertEquals("ADMIN", jwtService.extractRole(token));
-            assertEquals(99L, jwtService.extractUserId(token));
+        @DisplayName("No userId claim returns null")
+        void extractUserId_NoUserIdClaim_ReturnsNull() {
+            String token = jwtService.generateToken(userDetails);
+            assertNull(jwtService.extractUserId(token));
         }
     }
 }
