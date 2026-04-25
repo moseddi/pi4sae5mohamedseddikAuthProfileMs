@@ -371,4 +371,5 @@ class UserProfileServiceTest {
             assertEquals(Role.STUDENT, result.get(0).getRole());
         }
     }
+
 }
