@@ -1,0 +1,158 @@
+networks:
+  wallstreet-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  keycloak_data:
+  rabbitmq_data:
+
+services:
+
+  # ── 1. MySQL ─────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - wallstreet-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── 2. Keycloak ───────────────────────────────────────────────────────────
+  # No healthcheck — Keycloak 25 changed health endpoints.
+  # Services use restart: on-failure to retry until Keycloak is ready.
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    container_name: keycloak
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: dev-file
+    command: start-dev --import-realm
+    ports:
+      - "6083:8080"
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - C:/Users/seddi/myapp2-realm.json:/opt/keycloak/data/import/myapp2-realm.json:ro
+      - C:/Users/seddi/myapp2-users-0.json:/opt/keycloak/data/import/myapp2-users-0.json:ro
+    networks:
+      - wallstreet-net
+
+  # ── 3. RabbitMQ ───────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - wallstreet-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ── 4. Eureka ─────────────────────────────────────────────────────────────
+  eureka:
+    image: wallstreet/service-registry:latest
+    container_name: eureka
+    restart: unless-stopped
+    ports:
+      - "8761:8761"
+    networks:
+      - wallstreet-net
+
+  # ── 5. Auth Service ───────────────────────────────────────────────────────
+  # restart: on-failure ensures it retries if Keycloak is not ready yet
+  auth-service:
+    image: wallstreet/auth-service:latest
+    container_name: auth-service
+    restart: on-failure
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/auth_db?useUnicode=true&createDatabaseIfNotExist=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: guest
+      SPRING_RABBITMQ_PASSWORD: guest
+      KEYCLOAK_SERVER_URL: http://keycloak:8080
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/myapp2
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
+    ports:
+      - "8081:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - wallstreet-net
+
+  # ── 6. User Management Service ────────────────────────────────────────────
+  # restart: on-failure ensures it retries if Keycloak is not ready yet
+  user-service:
+    image: wallstreet/user-management-service:latest
+    container_name: user-service
+    restart: on-failure
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/user_management_db?useUnicode=true&createDatabaseIfNotExist=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: guest
+      SPRING_RABBITMQ_PASSWORD: guest
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/myapp2
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
+      AUTH_SERVICE_URL: http://auth-service:8081
+    ports:
+      - "8082:8082"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - wallstreet-net
+
+  # ── 7. API Gateway ────────────────────────────────────────────────────────
+  api-gateway:
+    image: wallstreet/api-gateway:latest
+    container_name: api-gateway
+    restart: on-failure
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
+      SPRING_CLOUD_GATEWAY_ROUTES_0_ID: auth-service
+      SPRING_CLOUD_GATEWAY_ROUTES_0_URI: http://auth-service:8081
+      SPRING_CLOUD_GATEWAY_ROUTES_0_PREDICATES_0: Path=/api/auth/**
+      SPRING_CLOUD_GATEWAY_ROUTES_1_ID: user-management-service
+      SPRING_CLOUD_GATEWAY_ROUTES_1_URI: http://user-service:8082
+      SPRING_CLOUD_GATEWAY_ROUTES_1_PREDICATES_0: Path=/api/users/**
+    ports:
+      - "8089:8089"
+    depends_on:
+      - eureka
+    networks:
+      - wallstreet-net
