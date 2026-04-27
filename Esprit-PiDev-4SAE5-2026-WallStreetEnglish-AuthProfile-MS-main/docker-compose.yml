@@ -46,8 +46,8 @@ services:
       - "6083:8080"
     volumes:
       - keycloak_data:/opt/keycloak/data
-      - C:/Users/seddi/myapp2-realm.json:/opt/keycloak/data/import/myapp2-realm.json:ro
-      - C:/Users/seddi/myapp2-users-0.json:/opt/keycloak/data/import/myapp2-users-0.json:ro
+      - ./keycloak/myapp2-realm.json:/opt/keycloak/data/import/myapp2-realm.json:ro
+      - ./keycloak/myapp2-users-0.json:/opt/keycloak/data/import/myapp2-users-0.json:ro
     networks:
       - wallstreet-net
 
