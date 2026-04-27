@@ -1179,7 +1179,7 @@
     "strictTransportSecurity" : "max-age=31536000; includeSubDomains"
   },
   "smtpServer" : {
-    "password" : "dzddwbrqxfdupgpk",
+    "password" : "",
     "replyToDisplayName" : "",
     "starttls" : "false",
     "auth" : "true",
@@ -1210,12 +1210,12 @@
     "linkOnly" : true,
     "config" : {
       "hideOnLoginPage" : "false",
-      "clientId" : "742212756801-i4v3eremam6n6q216584f67tpgmi4nkl.apps.googleusercontent.com",
+      "clientId" : "YOUR_GOOGLE_CLIENT_ID",
       "acceptsPromptNoneForwardFromClient" : "false",
       "disableUserInfo" : "false",
       "syncMode" : "LEGACY",
       "filteredByClaim" : "false",
-      "clientSecret" : "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",
+      "clientSecret" : "YOUR_GOOGLE_CLIENT_SECRET",
       "caseSensitiveOriginalUsername" : "false"
     }
   } ],
@@ -1306,7 +1306,7 @@
       "subComponents" : { },
       "config" : {
         "kid" : [ "da06449d-fe11-40a2-b963-8f6d605125c9" ],
-        "secret" : [ "" ],
+        "secret" : [ "l6-3j5Xz1JdqgKnfHo1tpQ" ],
         "priority" : [ "100" ]
       }
     }, {
