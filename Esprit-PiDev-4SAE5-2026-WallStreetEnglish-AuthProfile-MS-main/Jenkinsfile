@@ -3,7 +3,13 @@ pipeline {
 
     environment {
         SONAR_HOST_URL = 'http://localhost:9000'
-        SONAR_TOKEN = credentials('jenkins-user')
+        SONAR_TOKEN    = credentials('jenkins-user')
+
+        AUTH_IMAGE  = 'wallstreet/auth-service'
+        USER_IMAGE  = 'wallstreet/user-management-service'
+        IMAGE_TAG   = "${env.BUILD_NUMBER}"
+
+        ROOT = 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main'
     }
 
     stages {
@@ -11,53 +17,49 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo "✅ Code récupéré depuis GitHub (branche userms)"
+                echo "✅ Code récupéré depuis GitHub"
             }
         }
 
         stage('Install Parent POM') {
             steps {
-                dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main') {
-                    sh 'mvn clean install -N'
+                dir("${ROOT}") {
+                    sh 'mvn clean install -N -B'
                 }
                 echo "✅ Parent POM installé"
             }
         }
 
-        // ✏️ CHANGED: 'mvn clean test' → 'mvn clean verify'
-        // 'verify' runs tests AND generates the JaCoCo XML coverage report
-        // that SonarQube needs to display coverage (was 0.0% before)
+        // mvn verify builds the jar AND runs tests AND generates JaCoCo report
+        // The jar in target/ is then used directly by Docker - no Maven inside Docker
         stage('Tests - Auth Service') {
             steps {
-                dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
-                    sh 'mvn clean verify'
+                dir("${ROOT}/microservices/auth-service") {
+                    sh 'mvn clean verify -B'
                 }
                 echo "✅ Tests Auth Service passés"
             }
             post {
                 always {
-                    // ✏️ ADDED: publishes test results in Jenkins UI (Test Results tab)
                     junit(
-                        testResults: 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service/target/surefire-reports/*.xml',
+                        testResults: "${ROOT}/microservices/auth-service/target/surefire-reports/*.xml",
                         allowEmptyResults: true
                     )
                 }
             }
         }
 
-        // ✏️ CHANGED: same as above for user-management-service
         stage('Tests - User Service') {
             steps {
-                dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service') {
-                    sh 'mvn clean verify'
+                dir("${ROOT}/microservices/user-management-service") {
+                    sh 'mvn clean verify -B'
                 }
                 echo "✅ Tests User Service passés"
             }
             post {
                 always {
-                    // ✏️ ADDED: publishes test results in Jenkins UI
                     junit(
-                        testResults: 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service/target/surefire-reports/*.xml',
+                        testResults: "${ROOT}/microservices/user-management-service/target/surefire-reports/*.xml",
                         allowEmptyResults: true
                     )
                 }
@@ -67,10 +69,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sq1') {
-                    dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
-                        // ✏️ ADDED: -Dsonar.coverage.jacoco.xmlReportPaths
-                        // This tells SonarQube where to find the JaCoCo report
-                        // Without this line, coverage stays at 0.0%
+                    dir("${ROOT}/microservices/auth-service") {
                         sh """
                             mvn sonar:sonar \
                                 -Dsonar.projectKey=auth-service \
@@ -79,8 +78,7 @@ pipeline {
                                 -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
                         """
                     }
-                    dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service') {
-                        // ✏️ ADDED: same fix for user-management-service
+                    dir("${ROOT}/microservices/user-management-service") {
                         sh """
                             mvn sonar:sonar \
                                 -Dsonar.projectKey=user-service \
@@ -102,16 +100,67 @@ pipeline {
                 echo "✅ Quality Gate passé"
             }
         }
+
+        // Jars already built by mvn verify above
+        // Docker just copies them - no Maven inside Docker = FAST
+        stage('Build Docker Images') {
+            steps {
+                echo "🐳 Construction des images Docker..."
+                dir("${ROOT}") {
+                    sh "docker build -t ${AUTH_IMAGE}:${IMAGE_TAG} -t ${AUTH_IMAGE}:latest -f microservices/auth-service/Dockerfile ."
+                    sh "docker build -t ${USER_IMAGE}:${IMAGE_TAG} -t ${USER_IMAGE}:latest -f microservices/user-management-service/Dockerfile ."
+                }
+                echo "✅ Images construites"
+            }
+        }
+
+        stage('Deploy - Start Containers') {
+            steps {
+                echo "🚀 Déploiement de tous les conteneurs..."
+                dir("${ROOT}") {
+                    sh 'docker compose down --remove-orphans || true'
+                    sh 'docker compose up -d'
+                }
+                echo "✅ Tous les conteneurs démarrés"
+            }
+        }
+
+        stage('Smoke Test') {
+            steps {
+                echo "⏳ Attente du démarrage (45s)..."
+                sh 'sleep 45'
+                sh """
+                    curl --fail --silent http://localhost:8081/actuator/health \
+                    | grep -q '"status":"UP"' \
+                    && echo "✅ Auth Service UP" \
+                    || (echo "❌ Auth Service DOWN" && exit 1)
+                """
+                sh """
+                    curl --fail --silent http://localhost:8082/actuator/health \
+                    | grep -q '"status":"UP"' \
+                    && echo "✅ User Service UP" \
+                    || (echo "❌ User Service DOWN" && exit 1)
+                """
+            }
+        }
     }
 
     post {
         success {
-            echo "🎉 Pipeline CI terminé avec succès!"
-            echo "📊 Voir les résultats sur: ${SONAR_HOST_URL}"
+            echo "🎉 Pipeline CI/CD terminé avec succès!"
+            echo "📊 SonarQube  : ${SONAR_HOST_URL}"
+            echo "🔐 Keycloak   : http://localhost:6083"
+            echo "🐰 RabbitMQ   : http://localhost:15672"
+            echo "📡 Eureka     : http://localhost:8761"
+            echo "🐳 Auth       : http://localhost:8081"
+            echo "🐳 User       : http://localhost:8082"
+            echo "🌐 Gateway    : http://localhost:8089"
         }
         failure {
             echo "❌ Pipeline échoué"
-            echo "Vérifie les tests unitaires ou la qualité du code"
+            dir("${ROOT}") {
+                sh 'docker compose down || true'
+            }
         }
     }
 }
