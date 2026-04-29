@@ -1,5 +1,7 @@
 package tn.esprit.usermanagementservice.config;
 
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -8,16 +10,22 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
-
-import static org.springframework.security.config.Customizer.withDefaults;
 
 @Configuration
 @EnableWebSecurity
+@Slf4j
+@RequiredArgsConstructor
 public class SecurityConfig {
+
+    private final KeycloakJwtRoleConverter keycloakJwtRoleConverter;
 
     @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
     private String issuerUri;
+
+    @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}")
+    private String jwkSetUri;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -57,16 +65,45 @@ public class SecurityConfig {
                 )
                 .sessionManagement(sess -> sess
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(withDefaults()));
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .jwt(jwt -> jwt
+                                .jwtAuthenticationConverter(jwtAuthenticationConverter())
+                        )
+                );
 
         return http.build();
     }
 
     @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(keycloakJwtRoleConverter);
+        return converter;
+    }
+
+    @Bean
     public JwtDecoder jwtDecoder() {
-        String jwkSetUri = issuerUri + "/protocol/openid-connect/certs";
-        return NimbusJwtDecoder
-                .withJwkSetUri(jwkSetUri)
-                .build();
+        log.info("🔐 Initializing Flexible JwtDecoder for Issuer: {} and JWKS: {}", issuerUri, jwkSetUri);
+        NimbusJwtDecoder jwtDecoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
+        
+        // We allow both the public issuer (localhost:6083) and the internal one (keycloak:8080)
+        String internalIssuer = "http://keycloak:8080/realms/myapp2";
+        
+        org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator<org.springframework.security.oauth2.jwt.Jwt> validator = 
+            new org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator<>(
+                new org.springframework.security.oauth2.jwt.JwtTimestampValidator(),
+                jwt -> {
+                    String iss = jwt.getIssuer().toString();
+                    if (iss.equals(issuerUri) || iss.equals(internalIssuer)) {
+                        return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.success();
+                    }
+                    log.warn("❌ Invalid Issuer in token: {}. Expected either {} or {}", iss, issuerUri, internalIssuer);
+                    return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.failure(
+                        new org.springframework.security.oauth2.core.OAuth2Error("invalid_token", "The issuer is not trusted", null));
+                }
+            );
+        
+        jwtDecoder.setJwtValidator(validator);
+        return jwtDecoder;
     }
 }

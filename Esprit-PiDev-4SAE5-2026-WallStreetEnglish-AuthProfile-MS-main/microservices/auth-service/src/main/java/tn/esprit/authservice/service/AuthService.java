@@ -53,6 +53,9 @@ public class AuthService {
     @Value("${keycloak.server-url}")
     private String serverUrl;
 
+    @Value("${user.service.url:http://localhost:8082}")
+    private String userServiceUrl;
+
     public AuthResponse register(RegisterRequest request) {
         log.info("========== REGISTRATION STARTED ==========");
         log.info("Email: {}", request.getEmail());
@@ -182,10 +185,89 @@ public class AuthService {
         }
     }
 
+    /**
+     * Creates a user in Keycloak + local auth DB WITHOUT calling back to user-management-service.
+     * Used when user-management-service is the initiator, to avoid circular dependency.
+     */
+    public AuthResponse registerByAdmin(RegisterRequest request) {
+        log.info("========== ADMIN REGISTRATION (no UMS callback) ==========");
+        log.info("Email: {}", request.getEmail());
+        log.info("Requested Role: {}", request.getRole());
+
+        if (userRepository.findByEmail(request.getEmail()).isPresent()) {
+            log.error("❌ Email already exists in database: {}", request.getEmail());
+            throw new RuntimeException("Email already exists");
+        }
+
+        try {
+            UserRepresentation keycloakUser = new UserRepresentation();
+            keycloakUser.setUsername(request.getEmail());
+            keycloakUser.setEmail(request.getEmail());
+            keycloakUser.setEnabled(true);
+            keycloakUser.setEmailVerified(true);
+            if (request.getFirstName() != null) keycloakUser.setFirstName(request.getFirstName());
+            if (request.getLastName() != null)  keycloakUser.setLastName(request.getLastName());
+
+            CredentialRepresentation credential = new CredentialRepresentation();
+            credential.setType(CredentialRepresentation.PASSWORD);
+            credential.setValue(request.getPassword());
+            credential.setTemporary(false);
+            keycloakUser.setCredentials(Collections.singletonList(credential));
+
+            Response response = keycloakAdmin.realm(realm).users().create(keycloakUser);
+            if (response.getStatus() != 201 && response.getStatus() != 200) {
+                throw new RuntimeException("Failed to create user in Keycloak. Status: " + response.getStatus());
+            }
+
+            String keycloakId = response.getLocation().getPath().replaceAll(".*/([^/]+)$", "$1");
+            log.info("✅ User created in Keycloak with ID: {}", keycloakId);
+
+            Role userRole = request.getRole() != null ? request.getRole() : Role.STUDENT;
+
+            try {
+                RoleRepresentation role = keycloakAdmin.realm(realm).roles()
+                        .get(userRole.name()).toRepresentation();
+                keycloakAdmin.realm(realm).users().get(keycloakId)
+                        .roles().realmLevel().add(Collections.singletonList(role));
+                log.info("✅ Role {} assigned in Keycloak", userRole);
+            } catch (Exception e) {
+                log.error("❌ Failed to assign role: {}", e.getMessage());
+                throw new RuntimeException("Failed to assign role in Keycloak: " + e.getMessage());
+            }
+
+            User localUser = User.builder()
+                    .email(request.getEmail())
+                    .password("")
+                    .role(userRole)
+                    .keycloakId(keycloakId)
+                    .active(true)
+                    .emailVerified(true)
+                    .build();
+
+            User savedUser = userRepository.save(localUser);
+            log.info("✅ User saved in auth DB with ID: {}", savedUser.getId());
+
+            // ⚠️ Intentionally NOT calling userServiceClient.createProfile() here.
+            // The caller (user-management-service) is responsible for profile creation.
+
+            log.info("========== ADMIN REGISTRATION COMPLETED ==========");
+            return AuthResponse.builder()
+                    .email(savedUser.getEmail())
+                    .role(savedUser.getRole())
+                    .userId(savedUser.getId())
+                    .message("User created successfully by admin")
+                    .build();
+
+        } catch (Exception e) {
+            log.error("========== ADMIN REGISTRATION FAILED: {} ==========", e.getMessage());
+            throw new RuntimeException("Admin registration failed: " + e.getMessage());
+        }
+    }
+
     // ✅ ADD THIS METHOD
     private boolean isUserBlocked(String email) {
         try {
-            String url = "http://localhost:8082/api/users/check-blocked/" + email;
+            String url = userServiceUrl + "/api/users/check-blocked/" + email;
             Map<String, Object> response = webClient.get()
                     .uri(url)
                     .retrieve()

@@ -38,39 +38,31 @@ public class KeycloakService {
             String userId = users.get(0).getId();
             log.info("Found user in Keycloak with ID: {}", userId);
 
-            // Get the client
-            List<ClientRepresentation> clients = keycloakAdmin.realm(realm).clients().findByClientId(clientId);
-            if (clients.isEmpty()) {
-                throw new RuntimeException("Client not found in Keycloak");
-            }
-            String clientUuid = clients.get(0).getId();
-            log.info("Found client with UUID: {}", clientUuid);
+            // Find the realm role we want to assign
+            RoleRepresentation targetRole = keycloakAdmin.realm(realm).roles()
+                    .get(newRole).toRepresentation();
 
-            // Get all roles for this client
-            List<RoleRepresentation> availableRoles = keycloakAdmin.realm(realm).clients().get(clientUuid).roles().list();
-            log.info("Available roles: {}", availableRoles.stream().map(RoleRepresentation::getName).toList());
-
-            // Find the role we want to assign
-            RoleRepresentation targetRole = availableRoles.stream()
-                    .filter(role -> role.getName().equals(newRole))
-                    .findFirst()
-                    .orElseThrow(() -> new RuntimeException("Role " + newRole + " not found in Keycloak"));
-
-            // Get user's current roles
+            // Get user's current realm roles
             List<RoleRepresentation> currentRoles = keycloakAdmin.realm(realm).users().get(userId)
-                    .roles().clientLevel(clientUuid).listAll();
-            log.info("Current roles: {}", currentRoles.stream().map(RoleRepresentation::getName).toList());
+                    .roles().realmLevel().listAll();
+            log.info("Current realm roles: {}", currentRoles.stream().map(RoleRepresentation::getName).toList());
 
-            // Remove all current roles
-            if (!currentRoles.isEmpty()) {
+            // Filter out the business roles we want to replace
+            List<String> businessRoles = List.of("STUDENT", "TUTOR", "ADMIN");
+            List<RoleRepresentation> rolesToRemove = currentRoles.stream()
+                    .filter(role -> businessRoles.contains(role.getName()))
+                    .toList();
+
+            // Remove all current business roles
+            if (!rolesToRemove.isEmpty()) {
                 keycloakAdmin.realm(realm).users().get(userId)
-                        .roles().clientLevel(clientUuid).remove(currentRoles);
-                log.info("Removed {} existing roles", currentRoles.size());
+                        .roles().realmLevel().remove(rolesToRemove);
+                log.info("Removed {} existing business roles", rolesToRemove.size());
             }
 
             // Add new role
             keycloakAdmin.realm(realm).users().get(userId)
-                    .roles().clientLevel(clientUuid).add(Collections.singletonList(targetRole));
+                    .roles().realmLevel().add(Collections.singletonList(targetRole));
 
             log.info("✅ Role updated in Keycloak successfully");
 

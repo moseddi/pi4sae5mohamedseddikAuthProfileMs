@@ -1,4 +1,4 @@
-package tn.esprit.authservice.config;
+package tn.esprit.usermanagementservice.config;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -7,10 +7,13 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
+import tn.esprit.usermanagementservice.repository.UserProfileRepository;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.stream.Collectors;
 
 @Component
@@ -18,12 +21,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class KeycloakJwtRoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
 
-    private final tn.esprit.authservice.repository.UserRepository userRepository;
+    private final UserProfileRepository userProfileRepository;
 
     @Override
     public Collection<GrantedAuthority> convert(Jwt jwt) {
-        log.info("🔍 Converting JWT roles for: {}", jwt.getClaimAsString("email"));
-        java.util.Set<String> allRoles = new java.util.HashSet<>();
+        log.debug("Converting JWT roles. Claims: {}", jwt.getClaims());
+        Set<String> allRoles = new HashSet<>();
 
         // 1. Extract from realm_access (Standard Keycloak)
         Map<String, Object> realmAccess = jwt.getClaim("realm_access");
@@ -68,7 +71,7 @@ public class KeycloakJwtRoleConverter implements Converter<Jwt, Collection<Grant
             String email = jwt.getClaimAsString("email");
             if (email != null) {
                 log.info("⚠️ No business roles in token for {}, checking database...", email);
-                userRepository.findByEmail(email).ifPresent(user -> {
+                userProfileRepository.findByEmail(email).ifPresent(user -> {
                     allRoles.add(user.getRole().name());
                     log.info("✅ Found role in database: {}", user.getRole());
                 });

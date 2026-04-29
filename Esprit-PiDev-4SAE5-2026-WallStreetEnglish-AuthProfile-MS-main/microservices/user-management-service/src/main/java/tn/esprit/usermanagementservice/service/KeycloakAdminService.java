@@ -2,6 +2,7 @@ package tn.esprit.usermanagementservice.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -14,8 +15,12 @@ import java.util.Arrays;
 public class KeycloakAdminService {
 
     private final RestTemplate restTemplate;
-    private static final String KEYCLOAK_URL = "http://localhost:6083";
-    private static final String REALM = "myapp2";
+
+    @Value("${keycloak.server-url:http://keycloak:8080}")
+    private String keycloakUrl;
+
+    @Value("${keycloak.realm:myapp2}")
+    private String realm;
 
     public void logoutUserSessions(String email) {
         try {
@@ -35,7 +40,7 @@ public class KeycloakAdminService {
             headers.setBearerAuth(token);
             HttpEntity<?> request = new HttpEntity<>(headers);
 
-            String url = KEYCLOAK_URL + "/admin/realms/" + REALM + "/users/" + userId + "/logout";
+            String url = keycloakUrl + "/admin/realms/" + realm + "/users/" + userId + "/logout";
             restTemplate.exchange(url, HttpMethod.POST, request, String.class);
 
             log.info("✅ Logged out user: {}", email);
@@ -69,7 +74,7 @@ public class KeycloakAdminService {
             headers.setContentType(MediaType.APPLICATION_JSON);
 
             // Get all realm roles
-            String realmRolesUrl = KEYCLOAK_URL + "/admin/realms/" + REALM + "/roles";
+            String realmRolesUrl = keycloakUrl + "/admin/realms/" + realm + "/roles";
             log.info("Getting roles from: {}", realmRolesUrl);
 
             HttpEntity<?> getRolesRequest = new HttpEntity<>(headers);
@@ -101,7 +106,7 @@ public class KeycloakAdminService {
             log.info("Found target role: {} with ID: {}", targetRole.getName(), targetRole.getId());
 
             // Get user's current realm roles
-            String userRolesUrl = KEYCLOAK_URL + "/admin/realms/" + REALM + "/users/" + userId + "/role-mappings/realm";
+            String userRolesUrl = keycloakUrl + "/admin/realms/" + realm + "/users/" + userId + "/role-mappings/realm";
             log.info("Getting user roles from: {}", userRolesUrl);
 
             HttpEntity<?> getUserRolesRequest = new HttpEntity<>(headers);
@@ -150,7 +155,7 @@ public class KeycloakAdminService {
     }
 
     private String getAdminToken() {
-        String url = KEYCLOAK_URL + "/realms/master/protocol/openid-connect/token";
+        String url = keycloakUrl + "/realms/master/protocol/openid-connect/token";
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
@@ -183,7 +188,7 @@ public class KeycloakAdminService {
         headers.setBearerAuth(token);
         HttpEntity<?> request = new HttpEntity<>(headers);
 
-        String url = KEYCLOAK_URL + "/admin/realms/" + REALM + "/users?email=" + email;
+        String url = keycloakUrl + "/admin/realms/" + realm + "/users?email=" + email;
         log.info("Getting user ID from: {}", url);
 
         try {

@@ -116,6 +116,8 @@ public class UserProfileService {
             authRequest.setPassword(request.getPassword());
             authRequest.setConfirmPassword(request.getPassword());
             authRequest.setRole(request.getRole().name());
+            authRequest.setFirstName(request.getFirstName());
+            authRequest.setLastName(request.getLastName());
 
             String cleanToken = (adminToken != null && !adminToken.startsWith("Bearer "))
                     ? "Bearer " + adminToken
@@ -129,6 +131,7 @@ public class UserProfileService {
             throw new RuntimeException("Failed to create user in auth service: " + e.getMessage());
         }
     }
+
 
     // ── Profile updates ──────────────────────────────────────────────────────
 

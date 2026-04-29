@@ -39,8 +39,8 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_DB: dev-file
-      KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: 6083
+      KC_HOSTNAME_URL: http://localhost:6083
+      KC_HOSTNAME_ADMIN_URL: http://localhost:6083
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
     command: start-dev --import-realm
@@ -105,7 +105,8 @@ services:
       KEYCLOAK_ADMIN_USERNAME: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KEYCLOAK_CLIENT_ID: admin-cli
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://host.docker.internal:6083/realms/myapp2
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:6083/realms/myapp2
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/myapp2/protocol/openid-connect/certs
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
       USER_SERVICE_URL: http://user-service:8082
     ports:
@@ -132,7 +133,8 @@ services:
       SPRING_RABBITMQ_PORT: 5672
       SPRING_RABBITMQ_USERNAME: guest
       SPRING_RABBITMQ_PASSWORD: guest
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://host.docker.internal:6083/realms/myapp2
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:6083/realms/myapp2
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/myapp2/protocol/openid-connect/certs
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
       AUTH_SERVICE_URL: http://auth-service:8081
     ports:
@@ -156,10 +158,10 @@ services:
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
       SPRING_CLOUD_GATEWAY_ROUTES_0_ID: auth-service
-      SPRING_CLOUD_GATEWAY_ROUTES_0_URI: http://auth-service:8081
+      SPRING_CLOUD_GATEWAY_ROUTES_0_URI: lb://AUTH-SERVICE
       SPRING_CLOUD_GATEWAY_ROUTES_0_PREDICATES_0: Path=/api/auth/**
       SPRING_CLOUD_GATEWAY_ROUTES_1_ID: user-management-service
-      SPRING_CLOUD_GATEWAY_ROUTES_1_URI: http://user-service:8082
+      SPRING_CLOUD_GATEWAY_ROUTES_1_URI: lb://USER-MANAGEMENT-SERVICE
       SPRING_CLOUD_GATEWAY_ROUTES_1_PREDICATES_0: Path=/api/users/**
     ports:
       - "8089:8089"

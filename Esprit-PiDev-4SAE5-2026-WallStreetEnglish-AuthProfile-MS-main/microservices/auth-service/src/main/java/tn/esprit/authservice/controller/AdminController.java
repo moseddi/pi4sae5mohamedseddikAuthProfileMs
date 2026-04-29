@@ -29,8 +29,10 @@ public class AdminController {
     private final KeycloakService keycloakService;
 
     @PostMapping("/create")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<?> createUserByAdmin(@Valid @RequestBody RegisterRequest request) {
+    // NOTE: No @PreAuthorize here — this endpoint is called service-to-service
+    // from user-management-service. The admin role is verified at the gateway level.
+    // The /api/auth/admin/** path is still protected by SecurityConfig (.authenticated()).
+    public ResponseEntity<AuthResponse> createUserByAdmin(@Valid @RequestBody RegisterRequest request) {
         log.info("========== ADMIN CREATE USER ==========");
         log.info("Email: {}", request.getEmail());
         log.info("Role: {}", request.getRole());
@@ -38,26 +40,11 @@ public class AdminController {
         log.info("Last Name: {}", request.getLastName());
         log.info("=======================================");
 
-        try {
-            AuthResponse response = authService.register(request);
-            log.info("✅ User created successfully with ID: {}", response.getUserId());
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", true);
-            result.put("message", "User created successfully");
-            result.put("userId", response.getUserId());
-            result.put("email", response.getEmail());
-            result.put("role", response.getRole());
-
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            log.error("❌ Failed to create user: {}", e.getMessage(), e);
-
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(error);
-        }
+        // Use registerByAdmin() — does NOT call back to user-management-service,
+        // avoiding the circular dependency that caused the 500 error.
+        AuthResponse response = authService.registerByAdmin(request);
+        log.info("✅ User created successfully with ID: {}", response.getUserId());
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/test")

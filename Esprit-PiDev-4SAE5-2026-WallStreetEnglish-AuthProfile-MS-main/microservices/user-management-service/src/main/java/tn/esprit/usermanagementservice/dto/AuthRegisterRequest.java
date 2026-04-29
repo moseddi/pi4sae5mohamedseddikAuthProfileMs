@@ -8,4 +8,6 @@ public class AuthRegisterRequest {
     private String password;
     private String confirmPassword;
     private String role;
-}
+    private String firstName;
+    private String lastName;
+}
