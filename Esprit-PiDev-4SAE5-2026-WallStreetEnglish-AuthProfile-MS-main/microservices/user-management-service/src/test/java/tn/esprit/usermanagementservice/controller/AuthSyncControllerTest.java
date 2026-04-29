@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import tn.esprit.usermanagementservice.entity.Role;
+import tn.esprit.usermanagementservice.repository.UserProfileRepository;
 import tn.esprit.usermanagementservice.service.UserProfileService;
 
 import java.util.HashMap;
@@ -28,6 +29,7 @@ class AuthSyncControllerTest {
     @Autowired ObjectMapper objectMapper;
 
     @MockitoBean UserProfileService userProfileService;
+    @MockitoBean UserProfileRepository userProfileRepository;
 
     // ══════════════════════════════════════════════════════════════════════
     //  POST /api/users/from-auth — createProfileFromAuth
