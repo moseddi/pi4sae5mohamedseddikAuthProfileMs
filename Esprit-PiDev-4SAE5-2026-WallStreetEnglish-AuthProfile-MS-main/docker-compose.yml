@@ -43,6 +43,7 @@ services:
       KC_HOSTNAME_ADMIN_URL: http://localhost:6083
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
     command: start-dev --import-realm
     ports:
       - "6083:8080"
