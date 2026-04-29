@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.*;
-import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.mockito.InjectMocks;
@@ -22,6 +21,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * Unit tests for KeycloakService.updateUserRole().
+ *
+ * The service uses REALM-level roles (keycloakAdmin.realm(realm).roles()),
+ * NOT client-level roles. All mocks are aligned accordingly.
+ */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("KeycloakService Tests")
 class KeycloakServiceExtendedTest {
@@ -29,15 +34,14 @@ class KeycloakServiceExtendedTest {
     @Mock private Keycloak keycloakAdmin;
     @InjectMocks private KeycloakService keycloakService;
 
-    // Deep mock chain
-    @Mock private RealmResource realmResource;
-    @Mock private UsersResource usersResource;
-    @Mock private UserResource userResource;
-    @Mock private ClientsResource clientsResource;
-    @Mock private ClientResource clientResource;
-    @Mock private RolesResource rolesResource;
+    // Realm-level mock chain
+    @Mock private RealmResource    realmResource;
+    @Mock private UsersResource    usersResource;
+    @Mock private UserResource     userResource;
+    @Mock private RolesResource    realmRolesResource;    // realm roles resource
+    @Mock private RoleResource     realmRoleResource;     // single realm role
     @Mock private RoleMappingResource roleMappingResource;
-    @Mock private RoleScopeResource roleScopeResource;
+    @Mock private RoleScopeResource   realmScopeResource; // realm-level scope
 
     @BeforeEach
     void setUp() {
@@ -63,7 +67,7 @@ class KeycloakServiceExtendedTest {
         }
 
         @Test
-        @DisplayName("Should throw when client not found in Keycloak")
+        @DisplayName("Should throw when target realm role not found in Keycloak")
         void updateUserRole_ClientNotFound_ThrowsException() {
             UserRepresentation kcUser = new UserRepresentation();
             kcUser.setId("user-id-123");
@@ -72,8 +76,12 @@ class KeycloakServiceExtendedTest {
             when(keycloakAdmin.realm("myapp2")).thenReturn(realmResource);
             when(realmResource.users()).thenReturn(usersResource);
             when(usersResource.search("student@test.com")).thenReturn(List.of(kcUser));
-            when(realmResource.clients()).thenReturn(clientsResource);
-            when(clientsResource.findByClientId("angular-app")).thenReturn(Collections.emptyList());
+
+            // Service calls keycloakAdmin.realm(realm).roles().get(newRole).toRepresentation()
+            when(realmResource.roles()).thenReturn(realmRolesResource);
+            when(realmRolesResource.get("TUTOR")).thenReturn(realmRoleResource);
+            when(realmRoleResource.toRepresentation())
+                    .thenThrow(new RuntimeException("Role not found in Keycloak realm"));
 
             RuntimeException ex = assertThrows(RuntimeException.class, () ->
                     keycloakService.updateUserRole("student@test.com", "TUTOR"));
@@ -82,25 +90,19 @@ class KeycloakServiceExtendedTest {
         }
 
         @Test
-        @DisplayName("Should throw when target role not found in Keycloak client")
+        @DisplayName("Should throw when target role name is unknown")
         void updateUserRole_RoleNotFound_ThrowsException() {
             UserRepresentation kcUser = new UserRepresentation();
             kcUser.setId("user-id-123");
 
-            ClientRepresentation client = new ClientRepresentation();
-            client.setId("client-uuid");
-
-            RoleRepresentation otherRole = new RoleRepresentation();
-            otherRole.setName("STUDENT");
-
             when(keycloakAdmin.realm("myapp2")).thenReturn(realmResource);
             when(realmResource.users()).thenReturn(usersResource);
             when(usersResource.search("student@test.com")).thenReturn(List.of(kcUser));
-            when(realmResource.clients()).thenReturn(clientsResource);
-            when(clientsResource.findByClientId("angular-app")).thenReturn(List.of(client));
-            when(clientsResource.get("client-uuid")).thenReturn(clientResource);
-            when(clientResource.roles()).thenReturn(rolesResource);
-            when(rolesResource.list()).thenReturn(List.of(otherRole));
+
+            when(realmResource.roles()).thenReturn(realmRolesResource);
+            when(realmRolesResource.get("ADMIN")).thenReturn(realmRoleResource);
+            when(realmRoleResource.toRepresentation())
+                    .thenThrow(new RuntimeException("Unknown role: ADMIN"));
 
             RuntimeException ex = assertThrows(RuntimeException.class, () ->
                     keycloakService.updateUserRole("student@test.com", "ADMIN"));
@@ -114,9 +116,6 @@ class KeycloakServiceExtendedTest {
             UserRepresentation kcUser = new UserRepresentation();
             kcUser.setId("user-id-123");
 
-            ClientRepresentation client = new ClientRepresentation();
-            client.setId("client-uuid");
-
             RoleRepresentation targetRole = new RoleRepresentation();
             targetRole.setName("TUTOR");
 
@@ -126,34 +125,34 @@ class KeycloakServiceExtendedTest {
             when(keycloakAdmin.realm("myapp2")).thenReturn(realmResource);
             when(realmResource.users()).thenReturn(usersResource);
             when(usersResource.search("student@test.com")).thenReturn(List.of(kcUser));
-            when(realmResource.clients()).thenReturn(clientsResource);
-            when(clientsResource.findByClientId("angular-app")).thenReturn(List.of(client));
-            when(clientsResource.get("client-uuid")).thenReturn(clientResource);
-            when(clientResource.roles()).thenReturn(rolesResource);
-            when(rolesResource.list()).thenReturn(List.of(targetRole, currentRole));
+
+            // realm roles().get("TUTOR").toRepresentation()
+            when(realmResource.roles()).thenReturn(realmRolesResource);
+            when(realmRolesResource.get("TUTOR")).thenReturn(realmRoleResource);
+            when(realmRoleResource.toRepresentation()).thenReturn(targetRole);
+
+            // users().get(userId).roles().realmLevel().listAll()
             when(usersResource.get("user-id-123")).thenReturn(userResource);
             when(userResource.roles()).thenReturn(roleMappingResource);
-            when(roleMappingResource.clientLevel("client-uuid")).thenReturn(roleScopeResource);
-            when(roleScopeResource.listAll()).thenReturn(List.of(currentRole));
-            doNothing().when(roleScopeResource).remove(anyList());
-            doNothing().when(roleScopeResource).add(anyList());
+            when(roleMappingResource.realmLevel()).thenReturn(realmScopeResource);
+            when(realmScopeResource.listAll()).thenReturn(List.of(currentRole));
+
+            doNothing().when(realmScopeResource).remove(anyList());
+            doNothing().when(realmScopeResource).add(anyList());
             doNothing().when(userResource).logout();
 
             assertDoesNotThrow(() -> keycloakService.updateUserRole("student@test.com", "TUTOR"));
 
-            verify(roleScopeResource).remove(List.of(currentRole));
-            verify(roleScopeResource).add(List.of(targetRole));
+            verify(realmScopeResource).remove(List.of(currentRole));
+            verify(realmScopeResource).add(List.of(targetRole));
             verify(userResource).logout();
         }
 
         @Test
-        @DisplayName("Should skip remove step when user has no current roles")
+        @DisplayName("Should skip remove step when user has no current business roles")
         void updateUserRole_NoCurrentRoles_ShouldSkipRemove() {
             UserRepresentation kcUser = new UserRepresentation();
             kcUser.setId("user-id-123");
-
-            ClientRepresentation client = new ClientRepresentation();
-            client.setId("client-uuid");
 
             RoleRepresentation targetRole = new RoleRepresentation();
             targetRole.setName("TUTOR");
@@ -161,22 +160,24 @@ class KeycloakServiceExtendedTest {
             when(keycloakAdmin.realm("myapp2")).thenReturn(realmResource);
             when(realmResource.users()).thenReturn(usersResource);
             when(usersResource.search("student@test.com")).thenReturn(List.of(kcUser));
-            when(realmResource.clients()).thenReturn(clientsResource);
-            when(clientsResource.findByClientId("angular-app")).thenReturn(List.of(client));
-            when(clientsResource.get("client-uuid")).thenReturn(clientResource);
-            when(clientResource.roles()).thenReturn(rolesResource);
-            when(rolesResource.list()).thenReturn(List.of(targetRole));
+
+            when(realmResource.roles()).thenReturn(realmRolesResource);
+            when(realmRolesResource.get("TUTOR")).thenReturn(realmRoleResource);
+            when(realmRoleResource.toRepresentation()).thenReturn(targetRole);
+
             when(usersResource.get("user-id-123")).thenReturn(userResource);
             when(userResource.roles()).thenReturn(roleMappingResource);
-            when(roleMappingResource.clientLevel("client-uuid")).thenReturn(roleScopeResource);
-            when(roleScopeResource.listAll()).thenReturn(Collections.emptyList());
-            doNothing().when(roleScopeResource).add(anyList());
+            when(roleMappingResource.realmLevel()).thenReturn(realmScopeResource);
+            // No current roles → rolesToRemove is empty → remove() should NOT be called
+            when(realmScopeResource.listAll()).thenReturn(Collections.emptyList());
+
+            doNothing().when(realmScopeResource).add(anyList());
             doNothing().when(userResource).logout();
 
             assertDoesNotThrow(() -> keycloakService.updateUserRole("student@test.com", "TUTOR"));
 
-            verify(roleScopeResource, never()).remove(anyList());
-            verify(roleScopeResource).add(List.of(targetRole));
+            verify(realmScopeResource, never()).remove(anyList());
+            verify(realmScopeResource).add(List.of(targetRole));
         }
     }
 }

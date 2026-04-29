@@ -85,32 +85,33 @@ class AdminControllerTest {
     class CreateUserTests {
 
         @Test
-        @DisplayName("Should create user successfully and return 200 with result map")
+        @DisplayName("Should create user successfully and return 200 with AuthResponse")
         void createUser_ValidRequest_Returns200WithSuccessMap() throws Exception {
-            when(authService.register(any(RegisterRequest.class))).thenReturn(authResponse);
+            // Controller calls registerByAdmin(), not register()
+            when(authService.registerByAdmin(any(RegisterRequest.class))).thenReturn(authResponse);
 
             mockMvc.perform(post("/api/auth/admin/create")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(registerRequest)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.success").value(true))
-                    .andExpect(jsonPath("$.message").value("User created successfully"))
-                    .andExpect(jsonPath("$.userId").value(2))
-                    .andExpect(jsonPath("$.email").value("newuser@test.com"));
+                    .andExpect(jsonPath("$.token").value("mock-token"))
+                    .andExpect(jsonPath("$.email").value("newuser@test.com"))
+                    .andExpect(jsonPath("$.userId").value(2));
         }
 
         @Test
         @DisplayName("Should return 400 when authService throws exception")
         void createUser_ServiceThrows_Returns400WithErrorMap() throws Exception {
-            when(authService.register(any(RegisterRequest.class)))
+            // Controller calls registerByAdmin(), not register()
+            when(authService.registerByAdmin(any(RegisterRequest.class)))
                     .thenThrow(new RuntimeException("Email already exists"));
 
             mockMvc.perform(post("/api/auth/admin/create")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(registerRequest)))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.success").value(false))
-                    .andExpect(jsonPath("$.message").value("Email already exists"));
+                    // Global exception handler wraps the message in {"error": "..."}
+                    .andExpect(jsonPath("$.error").value("Email already exists"));
         }
 
         @Test
