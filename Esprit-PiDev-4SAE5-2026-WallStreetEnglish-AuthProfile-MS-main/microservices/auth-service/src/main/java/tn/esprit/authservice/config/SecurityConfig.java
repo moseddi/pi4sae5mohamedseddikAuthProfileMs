@@ -45,6 +45,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/test-email").permitAll()
                         .requestMatchers("/api/auth/admin/**").authenticated()
                         .requestMatchers("/api/auth/logout").permitAll()  // Add this line
+                        .requestMatchers("/actuator/**").permitAll()
                        // .requestMatchers("/api/auth/admin/create").permitAll()
                         .anyRequest().authenticated()
                 )

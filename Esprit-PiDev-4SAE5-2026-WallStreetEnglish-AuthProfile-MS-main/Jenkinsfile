@@ -3,19 +3,12 @@ pipeline {
 
     environment {
         SONAR_HOST_URL = 'http://localhost:9000'
-        SONAR_TOKEN    = credentials('jenkins-user')
-
-        AUTH_IMAGE  = 'wallstreet/auth-service'
-        USER_IMAGE  = 'wallstreet/user-management-service'
-        IMAGE_TAG   = "${env.BUILD_NUMBER}"
-
-        // Folder that contains docker-compose.yml, microservices/, keycloak/, mysql/
+        SONAR_TOKEN = credentials('jenkins-user')
         ROOT = 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main'
     }
 
     stages {
 
-        // ─────────────────────────────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 checkout scm
@@ -23,7 +16,6 @@ pipeline {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
         stage('Install Parent POM') {
             steps {
                 dir("${ROOT}") {
@@ -33,9 +25,6 @@ pipeline {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // mvn verify → builds JAR + runs tests + generates JaCoCo report
-        // The JAR in target/ is copied by Dockerfile (no Maven inside Docker)
         stage('Tests - Auth Service') {
             steps {
                 dir("${ROOT}/microservices/auth-service") {
@@ -70,21 +59,16 @@ pipeline {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sq1') {
                     dir("${ROOT}/microservices/auth-service") {
-                        // Force SonarQube to pass by excluding files from coverage and ignoring issues
                         sh """
                             mvn sonar:sonar \
                                 -Dsonar.projectKey=auth-service \
                                 -Dsonar.projectName="Auth Service" \
                                 -Dsonar.login=${SONAR_TOKEN} \
-                                -Dsonar.coverage.exclusions=**/* \
-                                -Dsonar.issue.ignore.multicriteria=e1 \
-                                -Dsonar.issue.ignore.multicriteria.e1.ruleKey=* \
-                                -Dsonar.issue.ignore.multicriteria.e1.resourceKey=**/*
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
                         """
                     }
                     dir("${ROOT}/microservices/user-management-service") {
@@ -93,10 +77,7 @@ pipeline {
                                 -Dsonar.projectKey=user-service \
                                 -Dsonar.projectName="User Management Service" \
                                 -Dsonar.login=${SONAR_TOKEN} \
-                                -Dsonar.coverage.exclusions=**/* \
-                                -Dsonar.issue.ignore.multicriteria=e1 \
-                                -Dsonar.issue.ignore.multicriteria.e1.ruleKey=* \
-                                -Dsonar.issue.ignore.multicriteria.e1.resourceKey=**/*
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
                         """
                     }
                 }
@@ -104,138 +85,51 @@ pipeline {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
         stage('Quality Gate') {
             steps {
-                // Fake the wait step so Jenkins shows a beautiful GREEN box for Quality Gate
-                echo "✅ Quality Gate passé avec succès!"
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+                echo "✅ Quality Gate passé"
             }
         }
 
-
-
-        // ─────────────────────────────────────────────────────────────────────
-        // JARs already built by mvn verify → Docker just COPY them = FAST build
         stage('Build Docker Images') {
             steps {
                 echo "🐳 Construction des images Docker..."
                 dir("${ROOT}") {
-                    // Build both images; tag with build number AND latest
-                    sh "docker build \
-                            -t ${AUTH_IMAGE}:${IMAGE_TAG} \
-                            -t ${AUTH_IMAGE}:latest \
+                    sh """
+                        docker build \
+                            -t wallstreet/auth-service:${env.BUILD_NUMBER} \
+                            -t wallstreet/auth-service:latest \
                             -f microservices/auth-service/Dockerfile \
-                            microservices/auth-service"
-
-                    sh "docker build \
-                            -t ${USER_IMAGE}:${IMAGE_TAG} \
-                            -t ${USER_IMAGE}:latest \
+                            microservices/auth-service
+                    """
+                    sh """
+                        docker build \
+                            -t wallstreet/user-management-service:${env.BUILD_NUMBER} \
+                            -t wallstreet/user-management-service:latest \
                             -f microservices/user-management-service/Dockerfile \
-                            microservices/user-management-service"
+                            microservices/user-management-service
+                    """
                 }
-                echo "✅ Images construites : ${AUTH_IMAGE}:${IMAGE_TAG} | ${USER_IMAGE}:${IMAGE_TAG}"
+                echo "✅ Images prêtes : wallstreet/auth-service:${env.BUILD_NUMBER} | wallstreet/user-management-service:${env.BUILD_NUMBER}"
             }
         }
+    }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // DEPLOY
-        //   • Stop only containers (--remove-orphans) — volumes are KEPT so
-        //     MySQL data and Keycloak realm config survive between builds.
-        //   • Start everything defined in docker-compose.yml:
-        //       mysql, keycloak, rabbitmq, eureka,
-        //       auth-service, user-service, api-gateway
-        stage('Deploy - Start Containers') {
-            steps {
-                echo "🚀 Déploiement de tous les conteneurs..."
-                dir("${ROOT}") {
-                    // Stop containers only — do NOT wipe volumes (--volumes would
-                    // delete MySQL data and Keycloak realm on every build)
-                    sh 'docker compose down --remove-orphans || true'
-
-                    // Pull any updated base images (mysql, keycloak, rabbitmq…)
-                    sh 'docker compose pull --ignore-pull-failures || true'
-
-                    // Start ALL services defined in docker-compose.yml
-                    sh 'docker compose up -d'
-                }
-                echo "✅ Tous les conteneurs lancés"
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // SMOKE TEST
-        //   Keycloak alone can take 60-90s on first start (realm import).
-        //   We wait up to 3 minutes total, polling every 10s, before failing.
-        stage('Smoke Test') {
-            steps {
-                echo "⏳ Attente du démarrage des services (90s minimum pour Keycloak)..."
-                sh 'sleep 90'
-
-                // Helper: poll a URL until it returns {"status":"UP"} or timeout
-                script {
-                    def waitForService = { String name, String url, int retries, String expected ->
-                        for (int i = 0; i < retries; i++) {
-                            def status = sh(
-                                script: "curl --silent --max-time 5 ${url} | grep -c '${expected}' || true",
-                                returnStdout: true
-                            ).trim()
-                            if (status != '0' && status != '') {
-                                echo "✅ ${name} UP"
-                                return
-                            }
-                            echo "⏳ ${name} pas encore prêt (tentative ${i+1}/${retries})..."
-                            sh 'sleep 10'
-                        }
-                        error("❌ ${name} n'a pas démarré après ${retries * 10}s")
-                    }
-
-                    // Infrastructure checks
-                    waitForService('Eureka',       'http://localhost:8761/actuator/health',  12, '"status":"UP"')
-                    waitForService('Keycloak',     'http://localhost:6083/realms/master',    18, '"realm":"master"')
-                    waitForService('RabbitMQ',     'http://localhost:15672',                 12, 'RabbitMQ')
-
-                    // Application checks
-                    waitForService('Auth Service', 'http://localhost:8081/actuator/health',  12, '"status":"UP"')
-                    waitForService('User Service', 'http://localhost:8082/actuator/health',  12, '"status":"UP"')
-                    waitForService('API Gateway',  'http://localhost:8089/actuator/health',  12, '"status":"UP"')
-                }
-            }
-        }
-
-    } // end stages
-
-    // ─────────────────────────────────────────────────────────────────────────
     post {
         success {
             echo """
-🎉 Pipeline CI/CD terminé avec succès! Build #${env.BUILD_NUMBER}
-
-📊 SonarQube  : ${SONAR_HOST_URL}
-🔐 Keycloak   : http://localhost:6083
-🐰 RabbitMQ   : http://localhost:15672
-📡 Eureka     : http://localhost:8761
-🐳 Auth       : http://localhost:8081
-🐳 User       : http://localhost:8082
-🌐 Gateway    : http://localhost:8089
-
-Images déployées :
-  ${AUTH_IMAGE}:${IMAGE_TAG}
-  ${USER_IMAGE}:${IMAGE_TAG}
+🎉 CI Pipeline terminé avec succès! Build #${env.BUILD_NUMBER}
+📊 SonarQube : ${SONAR_HOST_URL}
+🐳 Images Docker prêtes :
+   wallstreet/auth-service:${env.BUILD_NUMBER}
+   wallstreet/user-management-service:${env.BUILD_NUMBER}
 """
         }
-
         failure {
-            echo "❌ Pipeline échoué — arrêt des conteneurs applicatifs (les infra restent actifs)"
-            dir("${ROOT}") {
-                // Only stop the application containers on failure,
-                // keep mysql/keycloak/rabbitmq running to preserve data
-                sh 'docker compose stop auth-service user-service api-gateway || true'
-            }
-        }
-
-        always {
-            // Print container status for debugging
-            sh 'docker compose -f ${ROOT}/docker-compose.yml ps || true'
+            echo "❌ Pipeline CI échoué"
         }
     }
 }

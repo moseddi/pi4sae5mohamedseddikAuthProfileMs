@@ -61,6 +61,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/users").authenticated()
                         .requestMatchers("/api/users/block/**").authenticated()
                         .requestMatchers("/api/users/send-reactivation-email/**").authenticated()
+                        .requestMatchers("/actuator/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(sess -> sess
