@@ -7,6 +7,7 @@ import org.keycloak.representations.idm.CredentialRepresentation;
 import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
@@ -28,7 +29,6 @@ import jakarta.servlet.http.HttpServletRequest;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -36,6 +36,27 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 public class AuthService {
+
+    private static final String UNKNOWN_DEVICE_INFO = "Unknown";
+    private static final String DEVICE_TYPE_TABLET = "Tablet";
+    private static final String OS_ANDROID = "Android";
+    private static final String DEVICE_TYPE_MOBILE = "Mobile";
+    private static final String DEVICE_TYPE_DESKTOP = "Desktop";
+
+    private static final String BROWSER_CHROME = "Chrome";
+    private static final String BROWSER_FIREFOX = "Firefox";
+    private static final String BROWSER_SAFARI = "Safari";
+    private static final String BROWSER_EDGE = "Edge";
+    private static final String BROWSER_OPERA = "Opera";
+    private static final String BROWSER_IE = "Internet Explorer";
+
+    private static final String TOKEN_FIELD_ACCESS_TOKEN = "access_token";
+    private static final String TOKEN_FIELD_REFRESH_TOKEN = "refresh_token";
+
+    private static final String OS_WINDOWS = "Windows";
+    private static final String OS_MACOS = "MacOS";
+    private static final String OS_LINUX = "Linux";
+    private static final String OS_IOS = "iOS";
 
     private final UserRepository userRepository;
     private final UserServiceClient userServiceClient;
@@ -65,79 +86,25 @@ public class AuthService {
 
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
             log.error("❌ Email already exists in database: {}", request.getEmail());
-            throw new RuntimeException("Email already exists");
+            throw new RuntimeException("Email already exists: " + request.getEmail());
         }
 
+        String keycloakId = null;
         try {
             log.info("Step 1: Creating user in Keycloak: {}", request.getEmail());
-
-            UserRepresentation keycloakUser = new UserRepresentation();
-            keycloakUser.setUsername(request.getEmail());
-            keycloakUser.setEmail(request.getEmail());
-            keycloakUser.setEnabled(true);
-            keycloakUser.setEmailVerified(true);
-
-            if (request.getFirstName() != null) {
-                keycloakUser.setFirstName(request.getFirstName());
-            }
-            if (request.getLastName() != null) {
-                keycloakUser.setLastName(request.getLastName());
-            }
-
-            CredentialRepresentation credential = new CredentialRepresentation();
-            credential.setType(CredentialRepresentation.PASSWORD);
-            credential.setValue(request.getPassword());
-            credential.setTemporary(false);
-            keycloakUser.setCredentials(Collections.singletonList(credential));
-
-            log.info("Calling Keycloak to create user with realm: {}", realm);
-            Response response = keycloakAdmin.realm(realm).users().create(keycloakUser);
-            log.info("Keycloak response status: {}", response.getStatus());
-
-            if (response.getStatus() != 201 && response.getStatus() != 200) {
-                String errorMsg = "Failed to create user in Keycloak. Status: " + response.getStatus();
-                log.error("❌ {}", errorMsg);
-                throw new RuntimeException(errorMsg);
-            }
-
-            String keycloakId = response.getLocation().getPath().replaceAll(".*/([^/]+)$", "$1");
+            keycloakId = createUserInKeycloak(request);
             log.info("✅ User created in Keycloak with ID: {}", keycloakId);
 
             Role userRole = request.getRole() != null ? request.getRole() : Role.STUDENT;
             log.info("Step 2: Role determined: {}", userRole);
 
-            log.info("Step 3: Attempting to assign role '{}' in Keycloak", userRole);
-            try {
-                log.info("Fetching role '{}' from Keycloak realm '{}'", userRole.name(), realm);
-                RoleRepresentation role = keycloakAdmin.realm(realm).roles()
-                        .get(userRole.name()).toRepresentation();
+            assignRoleToUser(keycloakId, userRole);
 
-                log.info("✅ Role found in Keycloak: {}", role.getName());
-                log.info("Assigning role to user with ID: {}", keycloakId);
-
-                keycloakAdmin.realm(realm).users().get(keycloakId)
-                        .roles().realmLevel().add(Collections.singletonList(role));
-
-                log.info("✅ Successfully assigned realm role {} to user", userRole);
-            } catch (Exception e) {
-                log.error("❌ FAILED TO ASSIGN ROLE: {}", e.getMessage());
-                throw new RuntimeException("Failed to assign role in Keycloak: " + e.getMessage());
-            }
-
-            log.info("Step 4: Saving user in local database");
-            User localUser = User.builder()
-                    .email(request.getEmail())
-                    .password("")
-                    .role(userRole)
-                    .keycloakId(keycloakId)
-                    .active(true)
-                    .emailVerified(true)
-                    .build();
-
-            User savedUser = userRepository.save(localUser);
+            log.info("Step 3: Saving user in local database");
+            User savedUser = saveUserInLocalDatabase(request, keycloakId, userRole);
             log.info("✅ User saved in local DB with ID: {}", savedUser.getId());
 
-            log.info("Step 5: Getting token from Keycloak for user: {}", request.getEmail());
+            log.info("Step 4: Getting token from Keycloak for user: {}", request.getEmail());
             Map<String, Object> tokenResponse = getTokenFromKeycloak(
                     request.getEmail(),
                     request.getPassword()
@@ -146,38 +113,30 @@ public class AuthService {
             String token = null;
             String refreshToken = null;
 
-            if (tokenResponse != null && tokenResponse.containsKey("access_token")) {
-                token = (String) tokenResponse.get("access_token");
-                refreshToken = (String) tokenResponse.get("refresh_token");
+            if (tokenResponse != null && tokenResponse.containsKey(TOKEN_FIELD_ACCESS_TOKEN)) {
+                token = (String) tokenResponse.get(TOKEN_FIELD_ACCESS_TOKEN);
+                refreshToken = (String) tokenResponse.get(TOKEN_FIELD_REFRESH_TOKEN);
                 log.info("✅ Token obtained successfully");
             } else {
                 log.warn("⚠️ Could not obtain token, but user was created");
             }
 
-            log.info("Step 6: Creating profile in User Service");
-            try {
-                userServiceClient.createProfile(
-                        localUser.getEmail(),
-                        localUser.getRole().name(),
-                        request.getFirstName(),
-                        request.getLastName()
-                );
-                log.info("✅ Profile created in User Service");
-            } catch (Exception e) {
-                log.warn("⚠️ Profile creation failed: {}", e.getMessage());
-            }
+            log.info("Step 5: Creating profile in User Service");
+            createUserProfile(request, savedUser);
 
             log.info("========== REGISTRATION COMPLETED SUCCESSFULLY ==========");
 
             return AuthResponse.builder()
                     .token(token)
                     .refreshToken(refreshToken)
-                    .email(localUser.getEmail())
-                    .role(localUser.getRole())
-                    .userId(localUser.getId())
+                    .email(savedUser.getEmail())
+                    .role(savedUser.getRole())
+                    .userId(savedUser.getId())
                     .message("Registration successful")
                     .build();
 
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             log.error("========== REGISTRATION FAILED ==========");
             log.error("Error: {}", e.getMessage());
@@ -185,10 +144,6 @@ public class AuthService {
         }
     }
 
-    /**
-     * Creates a user in Keycloak + local auth DB WITHOUT calling back to user-management-service.
-     * Used when user-management-service is the initiator, to avoid circular dependency.
-     */
     public AuthResponse registerByAdmin(RegisterRequest request) {
         log.info("========== ADMIN REGISTRATION (no UMS callback) ==========");
         log.info("Email: {}", request.getEmail());
@@ -196,59 +151,18 @@ public class AuthService {
 
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
             log.error("❌ Email already exists in database: {}", request.getEmail());
-            throw new RuntimeException("Email already exists");
+            throw new RuntimeException("Email already exists: " + request.getEmail());
         }
 
         try {
-            UserRepresentation keycloakUser = new UserRepresentation();
-            keycloakUser.setUsername(request.getEmail());
-            keycloakUser.setEmail(request.getEmail());
-            keycloakUser.setEnabled(true);
-            keycloakUser.setEmailVerified(true);
-            if (request.getFirstName() != null) keycloakUser.setFirstName(request.getFirstName());
-            if (request.getLastName() != null)  keycloakUser.setLastName(request.getLastName());
-
-            CredentialRepresentation credential = new CredentialRepresentation();
-            credential.setType(CredentialRepresentation.PASSWORD);
-            credential.setValue(request.getPassword());
-            credential.setTemporary(false);
-            keycloakUser.setCredentials(Collections.singletonList(credential));
-
-            Response response = keycloakAdmin.realm(realm).users().create(keycloakUser);
-            if (response.getStatus() != 201 && response.getStatus() != 200) {
-                throw new RuntimeException("Failed to create user in Keycloak. Status: " + response.getStatus());
-            }
-
-            String keycloakId = response.getLocation().getPath().replaceAll(".*/([^/]+)$", "$1");
+            String keycloakId = createUserInKeycloak(request);
             log.info("✅ User created in Keycloak with ID: {}", keycloakId);
 
             Role userRole = request.getRole() != null ? request.getRole() : Role.STUDENT;
+            assignRoleToUser(keycloakId, userRole);
 
-            try {
-                RoleRepresentation role = keycloakAdmin.realm(realm).roles()
-                        .get(userRole.name()).toRepresentation();
-                keycloakAdmin.realm(realm).users().get(keycloakId)
-                        .roles().realmLevel().add(Collections.singletonList(role));
-                log.info("✅ Role {} assigned in Keycloak", userRole);
-            } catch (Exception e) {
-                log.error("❌ Failed to assign role: {}", e.getMessage());
-                throw new RuntimeException("Failed to assign role in Keycloak: " + e.getMessage());
-            }
-
-            User localUser = User.builder()
-                    .email(request.getEmail())
-                    .password("")
-                    .role(userRole)
-                    .keycloakId(keycloakId)
-                    .active(true)
-                    .emailVerified(true)
-                    .build();
-
-            User savedUser = userRepository.save(localUser);
+            User savedUser = saveUserInLocalDatabase(request, keycloakId, userRole);
             log.info("✅ User saved in auth DB with ID: {}", savedUser.getId());
-
-            // ⚠️ Intentionally NOT calling userServiceClient.createProfile() here.
-            // The caller (user-management-service) is responsible for profile creation.
 
             log.info("========== ADMIN REGISTRATION COMPLETED ==========");
             return AuthResponse.builder()
@@ -258,13 +172,94 @@ public class AuthService {
                     .message("User created successfully by admin")
                     .build();
 
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             log.error("========== ADMIN REGISTRATION FAILED: {} ==========", e.getMessage());
             throw new RuntimeException("Admin registration failed: " + e.getMessage());
         }
     }
 
-    // ✅ ADD THIS METHOD
+    private String createUserInKeycloak(RegisterRequest request) {
+        UserRepresentation keycloakUser = new UserRepresentation();
+        keycloakUser.setUsername(request.getEmail());
+        keycloakUser.setEmail(request.getEmail());
+        keycloakUser.setEnabled(true);
+        keycloakUser.setEmailVerified(true);
+
+        if (request.getFirstName() != null) {
+            keycloakUser.setFirstName(request.getFirstName());
+        }
+        if (request.getLastName() != null) {
+            keycloakUser.setLastName(request.getLastName());
+        }
+
+        CredentialRepresentation credential = new CredentialRepresentation();
+        credential.setType(CredentialRepresentation.PASSWORD);
+        credential.setValue(request.getPassword());
+        credential.setTemporary(false);
+        keycloakUser.setCredentials(Collections.singletonList(credential));
+
+        log.info("Calling Keycloak to create user with realm: {}", realm);
+        Response response = keycloakAdmin.realm(realm).users().create(keycloakUser);
+        log.info("Keycloak response status: {}", response.getStatus());
+
+        if (response.getStatus() != HttpStatus.CREATED.value() && response.getStatus() != HttpStatus.OK.value()) {
+            String errorMsg = "Failed to create user in Keycloak. Status: " + response.getStatus();
+            log.error("❌ {}", errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+
+        return response.getLocation().getPath().replaceAll(".*/([^/]+)$", "$1");
+    }
+
+    private void assignRoleToUser(String keycloakId, Role userRole) {
+        log.info("Attempting to assign role '{}' in Keycloak", userRole);
+        try {
+            log.info("Fetching role '{}' from Keycloak realm '{}'", userRole.name(), realm);
+            RoleRepresentation role = keycloakAdmin.realm(realm).roles()
+                    .get(userRole.name()).toRepresentation();
+
+            log.info("✅ Role found in Keycloak: {}", role.getName());
+            log.info("Assigning role to user with ID: {}", keycloakId);
+
+            keycloakAdmin.realm(realm).users().get(keycloakId)
+                    .roles().realmLevel().add(Collections.singletonList(role));
+
+            log.info("✅ Successfully assigned realm role {} to user", userRole);
+        } catch (Exception e) {
+            log.error("❌ FAILED TO ASSIGN ROLE: {}", e.getMessage());
+            throw new RuntimeException("Failed to assign role in Keycloak: " + e.getMessage());
+        }
+    }
+
+    private User saveUserInLocalDatabase(RegisterRequest request, String keycloakId, Role userRole) {
+        User localUser = User.builder()
+                .email(request.getEmail())
+                .password("")
+                .role(userRole)
+                .keycloakId(keycloakId)
+                .active(true)
+                .emailVerified(true)
+                .build();
+
+        return userRepository.save(localUser);
+    }
+
+    private void createUserProfile(RegisterRequest request, User savedUser) {
+        try {
+            userServiceClient.createProfile(
+                    savedUser.getEmail(),
+                    savedUser.getRole().name(),
+                    request.getFirstName(),
+                    request.getLastName()
+            );
+            log.info("✅ Profile created in User Service");
+        } catch (Exception e) {
+            log.warn("⚠️ Profile creation failed: {}", e.getMessage());
+        }
+    }
+
     private boolean isUserBlocked(String email) {
         try {
             String url = userServiceUrl + "/api/users/check-blocked/" + email;
@@ -289,22 +284,18 @@ public class AuthService {
                     request.getPassword()
             );
 
-            if (tokenResponse == null || !tokenResponse.containsKey("access_token")) {
+            if (tokenResponse == null || !tokenResponse.containsKey(TOKEN_FIELD_ACCESS_TOKEN)) {
                 throw new RuntimeException("Failed to get token from Keycloak");
             }
 
             User user = userRepository.findByEmail(request.getEmail())
-                    .orElseThrow(() -> new RuntimeException("User not found in database"));
+                    .orElseThrow(() -> new RuntimeException("User not found in database: " + request.getEmail()));
 
-            // ✅ CHECK IF USER IS BLOCKED
             if (isUserBlocked(request.getEmail())) {
                 throw new RuntimeException("Your account is blocked. Please check your email for reactivation instructions.");
             }
 
-            // ✅ READ ROLE FROM KEYCLOAK JWT — not from local DB.
-            // The local DB can be stale if a role-update failed to sync.
-            // The JWT is always the source of truth because Keycloak was updated directly.
-            String accessToken = (String) tokenResponse.get("access_token");
+            String accessToken = (String) tokenResponse.get(TOKEN_FIELD_ACCESS_TOKEN);
             Role roleFromJwt = extractRoleFromJwt(accessToken);
 
             if (roleFromJwt != null) {
@@ -315,7 +306,6 @@ public class AuthService {
                     userRepository.save(user);
                 }
             } else {
-                // JWT has no business role — fall back to DB value
                 roleFromJwt = user.getRole();
                 log.warn("⚠️ No business role found in JWT for {}, falling back to DB role: {}",
                         user.getEmail(), roleFromJwt);
@@ -330,26 +320,32 @@ public class AuthService {
                 log.error("Failed to record login in User Service: {}", e.getMessage());
             }
 
-            try {
-                LoginEventMessage event = buildLoginEventMessage(user);
-                rabbitTemplate.convertAndSend(RabbitMQConfig.LOGIN_QUEUE, event);
-                log.info("✅ Sent LoginEventMessage to RabbitMQ: {} for {}", event.getType(), event.getEmail());
-            } catch (Exception e) {
-                log.error("❌ RabbitMQ error: {}", e.getMessage());
-            }
+            sendLoginEventToRabbitMQ(user);
 
             return AuthResponse.builder()
                     .token(accessToken)
-                    .refreshToken((String) tokenResponse.get("refresh_token"))
+                    .refreshToken((String) tokenResponse.get(TOKEN_FIELD_REFRESH_TOKEN))
                     .email(user.getEmail())
-                    .role(roleFromJwt)          // ← always from Keycloak JWT
+                    .role(roleFromJwt)
                     .userId(user.getId())
                     .message("Login successful")
                     .build();
 
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Login failed: {}", e.getMessage());
             throw new RuntimeException("Invalid credentials");
+        }
+    }
+
+    private void sendLoginEventToRabbitMQ(User user) {
+        try {
+            LoginEventMessage event = buildLoginEventMessage(user);
+            rabbitTemplate.convertAndSend(RabbitMQConfig.LOGIN_QUEUE, event);
+            log.info("✅ Sent LoginEventMessage to RabbitMQ: {} for {}", event.getType(), event.getEmail());
+        } catch (Exception e) {
+            log.error("❌ RabbitMQ error: {}", e.getMessage());
         }
     }
 
@@ -358,17 +354,11 @@ public class AuthService {
             log.info("Logging out user: {}", email);
 
             User user = userRepository.findByEmail(email)
-                    .orElseThrow(() -> new RuntimeException("User not found in database"));
+                    .orElseThrow(() -> new RuntimeException("User not found in database: " + email));
 
             LogoutType type = logoutType != null ? LogoutType.valueOf(logoutType) : LogoutType.VOLUNTARY;
 
-            try {
-                LoginEventMessage event = buildLogoutEventMessage(user, type);
-                rabbitTemplate.convertAndSend(RabbitMQConfig.LOGIN_QUEUE, event);
-                log.info("✅ Sent LogoutEventMessage to RabbitMQ: {} for {}", event.getType(), event.getEmail());
-            } catch (Exception e) {
-                log.error("❌ RabbitMQ error during logout: {}", e.getMessage());
-            }
+            sendLogoutEventToRabbitMQ(user, type);
 
             return AuthResponse.builder()
                     .email(user.getEmail())
@@ -376,23 +366,29 @@ public class AuthService {
                     .message("Logout successful")
                     .build();
 
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Logout failed: {}", e.getMessage());
             throw new RuntimeException("Logout failed: " + e.getMessage());
         }
     }
 
-    /**
-     * Decodes the Keycloak JWT and extracts the first matching business role
-     * from realm_access.roles (ADMIN, TUTOR, STUDENT).
-     * Returns null if no business role is found.
-     */
+    private void sendLogoutEventToRabbitMQ(User user, LogoutType type) {
+        try {
+            LoginEventMessage event = buildLogoutEventMessage(user, type);
+            rabbitTemplate.convertAndSend(RabbitMQConfig.LOGIN_QUEUE, event);
+            log.info("✅ Sent LogoutEventMessage to RabbitMQ: {} for {}", event.getType(), event.getEmail());
+        } catch (Exception e) {
+            log.error("❌ RabbitMQ error during logout: {}", e.getMessage());
+        }
+    }
+
     private Role extractRoleFromJwt(String accessToken) {
         try {
             String[] parts = accessToken.split("\\.");
             if (parts.length < 2) return null;
 
-            // Base64url-decode the payload (add padding if needed)
             String padded = parts[1];
             int mod = padded.length() % 4;
             if (mod != 0) padded = padded + "=".repeat(4 - mod);
@@ -400,11 +396,10 @@ public class AuthService {
             String payload = new String(java.util.Base64.getUrlDecoder().decode(padded));
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             @SuppressWarnings("unchecked")
-            java.util.Map<String, Object> claims = mapper.readValue(payload, java.util.Map.class);
+            Map<String, Object> claims = mapper.readValue(payload, Map.class);
 
-            // realm_access.roles is the standard Keycloak location for realm roles
             @SuppressWarnings("unchecked")
-            java.util.Map<String, Object> realmAccess = (java.util.Map<String, Object>) claims.get("realm_access");
+            Map<String, Object> realmAccess = (Map<String, Object>) claims.get("realm_access");
             if (realmAccess != null) {
                 @SuppressWarnings("unchecked")
                 java.util.List<String> roles = (java.util.List<String>) realmAccess.get("roles");
@@ -415,7 +410,7 @@ public class AuthService {
                             log.info("✅ Role extracted from JWT: {}", role);
                             return role;
                         } catch (IllegalArgumentException ignored) {
-                            // Not a business role (e.g. default-roles-myapp2), skip
+                            // Not a business role, skip
                         }
                     }
                 }
@@ -471,9 +466,9 @@ public class AuthService {
             event.setOs(parseOperatingSystem(userAgent));
             event.setDeviceType(parseDeviceType(userAgent));
         } else {
-            event.setBrowser("Unknown");
-            event.setOs("Unknown");
-            event.setDeviceType("Desktop");
+            event.setBrowser(UNKNOWN_DEVICE_INFO);
+            event.setOs(UNKNOWN_DEVICE_INFO);
+            event.setDeviceType(DEVICE_TYPE_DESKTOP);
         }
 
         return event;
@@ -497,9 +492,9 @@ public class AuthService {
             event.setOs(parseOperatingSystem(userAgent));
             event.setDeviceType(parseDeviceType(userAgent));
         } else {
-            event.setBrowser("Unknown");
-            event.setOs("Unknown");
-            event.setDeviceType("Desktop");
+            event.setBrowser(UNKNOWN_DEVICE_INFO);
+            event.setOs(UNKNOWN_DEVICE_INFO);
+            event.setDeviceType(DEVICE_TYPE_DESKTOP);
         }
 
         return event;
@@ -528,32 +523,32 @@ public class AuthService {
     }
 
     private String parseBrowser(String userAgent) {
-        if (userAgent.contains("Chrome")) return "Chrome";
-        if (userAgent.contains("Firefox")) return "Firefox";
-        if (userAgent.contains("Safari") && !userAgent.contains("Chrome")) return "Safari";
-        if (userAgent.contains("Edge")) return "Edge";
-        if (userAgent.contains("Opera") || userAgent.contains("OPR")) return "Opera";
-        if (userAgent.contains("MSIE") || userAgent.contains("Trident")) return "Internet Explorer";
-        return "Unknown";
+        if (userAgent.contains(BROWSER_CHROME)) return BROWSER_CHROME;
+        if (userAgent.contains(BROWSER_FIREFOX)) return BROWSER_FIREFOX;
+        if (userAgent.contains(BROWSER_SAFARI) && !userAgent.contains(BROWSER_CHROME)) return BROWSER_SAFARI;
+        if (userAgent.contains(BROWSER_EDGE)) return BROWSER_EDGE;
+        if (userAgent.contains(BROWSER_OPERA) || userAgent.contains("OPR")) return BROWSER_OPERA;
+        if (userAgent.contains("MSIE") || userAgent.contains("Trident")) return BROWSER_IE;
+        return UNKNOWN_DEVICE_INFO;
     }
 
     private String parseOperatingSystem(String userAgent) {
-        if (userAgent.contains("Windows")) return "Windows";
-        if (userAgent.contains("Mac")) return "MacOS";
-        if (userAgent.contains("Linux")) return "Linux";
-        if (userAgent.contains("Android")) return "Android";
-        if (userAgent.contains("iOS") || userAgent.contains("iPhone") || userAgent.contains("iPad")) return "iOS";
-        return "Unknown";
+        if (userAgent.contains(OS_WINDOWS)) return OS_WINDOWS;
+        if (userAgent.contains("Mac")) return OS_MACOS;
+        if (userAgent.contains(OS_LINUX)) return OS_LINUX;
+        if (userAgent.contains(OS_ANDROID)) return OS_ANDROID;
+        if (userAgent.contains("iOS") || userAgent.contains("iPhone") || userAgent.contains("iPad")) return OS_IOS;
+        return UNKNOWN_DEVICE_INFO;
     }
 
     private String parseDeviceType(String userAgent) {
-        if (userAgent.contains("Mobile") || userAgent.contains("Android") && !userAgent.contains("Tablet")) {
-            return "Mobile";
+        if (userAgent.contains(DEVICE_TYPE_MOBILE) || (userAgent.contains(OS_ANDROID) && !userAgent.contains(DEVICE_TYPE_TABLET))) {
+            return DEVICE_TYPE_MOBILE;
         }
-        if (userAgent.contains("Tablet") || userAgent.contains("iPad")) {
-            return "Tablet";
+        if (userAgent.contains(DEVICE_TYPE_TABLET) || userAgent.contains("iPad")) {
+            return DEVICE_TYPE_TABLET;
         }
-        return "Desktop";
+        return DEVICE_TYPE_DESKTOP;
     }
 
     private LoginEventMessage.LogoutType convertLogoutType(LogoutType logoutType) {
